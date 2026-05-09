@@ -13,7 +13,11 @@ import ReplayKit
         
         // 1. Đăng ký plugin
         GeneratedPluginRegistrant.register(with: self)
-        
+        // 🚀 DỌN DẸP CỜ CŨ LÚC KHỞI ĐỘNG APP
+        if let userDefaults = UserDefaults(suiteName: "group.com.quickcapture.com") {
+            userDefaults.set(false, forKey: "hasNewVideo")
+            userDefaults.synchronize()
+        }
         // 2. Lấy luồng giao tiếp thẳng từ Registrar
         let registrar = self.registrar(forPlugin: "QuickCaptureApp")!
         channel = FlutterMethodChannel(name: "quick_capture", binaryMessenger: registrar.messenger())

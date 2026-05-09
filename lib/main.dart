@@ -1,3 +1,6 @@
+import 'dart:io';
+import 'dart:math';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -241,6 +244,23 @@ class _ScreenRecordAppState extends State<ScreenRecordApp>
     );
   }
 
+  // 🚀 HÀM MỚI: Tính toán dung lượng file từ Bytes sang KB, MB, GB
+  String _getFileSize(String path) {
+    try {
+      final file = File(path);
+      if (!file.existsSync()) return "Không xác định";
+
+      int bytes = file.lengthSync();
+      if (bytes <= 0) return "0 B";
+
+      const suffixes = ["B", "KB", "MB", "GB", "TB"];
+      var i = (log(bytes) / log(1024)).floor();
+      return ((bytes / pow(1024, i)).toStringAsFixed(1)) + ' ' + suffixes[i];
+    } catch (e) {
+      return "Lỗi đọc file";
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -336,43 +356,66 @@ class _ScreenRecordAppState extends State<ScreenRecordApp>
 
   Widget _buildRecordPanel() {
     return Container(
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.symmetric(vertical: 10),
+      width: double.infinity,
       decoration: const BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.vertical(bottom: Radius.circular(25)),
       ),
       child: Column(
         children: [
-          Text(
-            status,
-            style: const TextStyle(
-              color: Colors.grey,
-              fontSize: 13,
-              fontWeight: FontWeight.bold,
+          // Nút bấm ghi hình phong cách Camera iOS
+          GestureDetector(
+            onTap: isRecording ? stopRecord : startRecord,
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 300),
+              curve: Curves.easeInOut,
+              width: 85,
+              height: 85,
+              padding: const EdgeInsets.all(4),
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: isRecording
+                      ? Colors.grey.shade300
+                      : Colors.redAccent.withOpacity(0.3),
+                  width: 3,
+                ),
+              ),
+              child: Center(
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 300),
+                  curve: Curves.easeInOut,
+                  // Khi đang quay: Hình vuông nhỏ (35x35) - Khi sẵn sàng: Hình tròn to (65x65)
+                  width: isRecording ? 35 : 65,
+                  height: isRecording ? 35 : 65,
+                  decoration: BoxDecoration(
+                    color: isRecording ? Colors.grey[800] : Colors.redAccent,
+                    // Bo góc 10 để thành hình vuông khi quay, bo góc 50 để thành hình tròn khi sẵn sàng
+                    borderRadius: BorderRadius.circular(isRecording ? 10 : 50),
+                    boxShadow: [
+                      BoxShadow(
+                        color:
+                            (isRecording ? Colors.grey[600]! : Colors.redAccent)
+                                .withOpacity(0.4),
+                        blurRadius: 10,
+                        spreadRadius: 1,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
             ),
           ),
-          const SizedBox(height: 15),
-
-          // 🚀 LOGIC ĐỔI GIAO DIỆN NÚT BẤM
-          ElevatedButton.icon(
-            onPressed: isRecording ? stopRecord : startRecord,
-            style: ElevatedButton.styleFrom(
-              backgroundColor: isRecording
-                  ? Colors.grey[800]
-                  : Colors.redAccent,
-              foregroundColor: Colors.white,
-              minimumSize: const Size(double.infinity, 55),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(15),
-              ),
-              elevation: isRecording ? 1 : 4,
-            ),
-            icon: Icon(
-              isRecording ? Icons.stop_rounded : Icons.fiber_manual_record,
-            ),
-            label: Text(
-              isRecording ? "DỪNG GHI HÌNH" : "BẮT ĐẦU GHI HÌNH",
-              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+          const SizedBox(height: 16),
+          // Text trạng thái nút bấm
+          Text(
+            isRecording ? "DỪNG GHI HÌNH" : "BẮT ĐẦU GHI HÌNH",
+            style: TextStyle(
+              fontWeight: FontWeight.w800,
+              fontSize: 14,
+              letterSpacing: 0.5,
+              color: isRecording ? Colors.grey[800] : Colors.redAccent,
             ),
           ),
         ],
@@ -416,11 +459,23 @@ class _ScreenRecordAppState extends State<ScreenRecordApp>
             title: Text(
               fileName,
               style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis, // Cắt chữ nếu tên file quá dài
             ),
-            subtitle: const Text(
-              "Tệp video cục bộ • .mp4",
-              style: TextStyle(fontSize: 12, color: Colors.grey),
+
+            // 🚀 CẬP NHẬT Ở ĐÂY: Hiển thị thêm dung lượng file
+            subtitle: Padding(
+              padding: const EdgeInsets.only(top: 4.0),
+              child: Text(
+                "Tệp video cục bộ • ${_getFileSize(path)}",
+                style: const TextStyle(
+                  fontSize: 12,
+                  color: Colors.grey,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
             ),
+
             trailing: _buildItemMenu(path, fileName),
           ),
         );

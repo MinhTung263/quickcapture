@@ -17,6 +17,9 @@ import java.io.FileInputStream
 import android.net.Uri
 import android.provider.Settings
 import android.content.IntentFilter
+import android.os.Handler
+import android.os.Looper
+
 class MainActivity: FlutterActivity() {
     private val CHANNEL = "quick_capture"
     private val SCREEN_RECORD_REQUEST_CODE = 1000
@@ -25,7 +28,11 @@ class MainActivity: FlutterActivity() {
     private val videoSavedReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action == "com.quickcapture.vn.VIDEO_SAVED") {
-                // Gửi lệnh yêu cầu Flutter load lại danh sách ngay lập tức
+                // 🚀 TỰ ĐỘNG DỌN DẸP CỜ NGAY TẠI ĐÂY
+                context?.getSharedPreferences("QuickCapturePrefs", Context.MODE_PRIVATE)
+                    ?.edit()?.putBoolean("hasNewVideo", false)?.apply()
+
+                // Báo cho Flutter
                 methodChannel?.invokeMethod("onVideoSaved", null)
             }
         }
@@ -34,6 +41,9 @@ class MainActivity: FlutterActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         methodChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL)
+
+        val prefs = getSharedPreferences("QuickCapturePrefs", Context.MODE_PRIVATE)
+        prefs.edit().putBoolean("hasNewVideo", false).apply()
 
         val filter = IntentFilter("com.quickcapture.vn.VIDEO_SAVED")
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -127,16 +137,20 @@ class MainActivity: FlutterActivity() {
                     startService(serviceIntent)
                 }
 
-                // 🚀 THÊM DÒNG NÀY: Báo cho Flutter đổi màu nút thành "DỪNG GHI HÌNH" ngay lập tức
-                methodChannel?.invokeMethod("onRecordingStarted", null)
+                // 🚀 BỌC DELAY: Đợi 0.5s để Flutter thức dậy hoàn toàn rồi mới đổi nút
+                Handler(Looper.getMainLooper()).postDelayed({
+                    methodChannel?.invokeMethod("onRecordingStarted", null)
+                }, 500)
 
             } else {
                 // Người dùng bấm HỦY hoặc tắt hộp thoại
                 prefs.edit().putBoolean("isRecordingActive", false)
                     .putBoolean("hasNewVideo", false).apply()
 
-                // 🚀 THÊM DÒNG NÀY: Báo cho Flutter reset nút về "Sẵn sàng"
-                methodChannel?.invokeMethod("onRecordingStopped", null)
+                // 🚀 BỌC DELAY TƯƠNG TỰ
+                Handler(Looper.getMainLooper()).postDelayed({
+                    methodChannel?.invokeMethod("onRecordingStopped", null)
+                }, 500)
             }
         }
     }
