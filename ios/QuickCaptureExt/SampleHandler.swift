@@ -5,44 +5,45 @@ class SampleHandler: RPBroadcastSampleHandler {
     private var assetWriter: AVAssetWriter?
     private var videoInput: AVAssetWriterInput?
     private var isRecording = false
-    
-    // Đường dẫn file TẠM THỜI (trong nội bộ Extension)
     private var tempVideoURL: URL?
-    
-    // Tên file để sau này copy sang App Group
     private var currentFileName: String = ""
+    private var sessionStarted = false // Biến kiểm soát trạng thái session
 
     override func broadcastStarted(withSetupInfo setupInfo: [String : NSObject]?) {
-        // 1. Tạo tên file duy nhất theo thời gian
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyyMMdd_HHmmss"
         currentFileName = "REC_\(formatter.string(from: Date())).mp4"
+        // Lưu tên file vào UserDefaults App Group để App chính hoặc Extension có thể truy xuất lại nếu cần
+            if let userDefaults = UserDefaults(suiteName: "group.com.quickcapture.com") {
+                userDefaults.set(currentFileName, forKey: "currentRecordingFileName")
+                userDefaults.set(true, forKey: "isRecordingActive") // Đánh dấu đang quay
+                userDefaults.synchronize()
+            }
+
+       
+       
         
-        // 2. SỬA LỖI TẠI ĐÂY: Ghi vào thư mục TEMP nội bộ thay vì App Group
         let tempDir = FileManager.default.temporaryDirectory
         let tempURL = tempDir.appendingPathComponent(currentFileName)
         self.tempVideoURL = tempURL
         
-        // Xóa file temp nếu vô tình bị trùng
         if FileManager.default.fileExists(atPath: tempURL.path) {
             try? FileManager.default.removeItem(at: tempURL)
         }
         
         do {
-            // Khởi tạo ghi file tại thư mục Temp (Đảm bảo 100% iOS không báo lỗi URL)
             let writer = try AVAssetWriter(outputURL: tempURL, fileType: .mp4)
             
-            let screenWidth = Int(UIScreen.main.bounds.width * UIScreen.main.scale)
-            let screenHeight = Int(UIScreen.main.bounds.height * UIScreen.main.scale)
-            
-            // Ép kích thước về số chẵn
-            let validWidth = screenWidth - (screenWidth % 16)
-            let validHeight = screenHeight - (screenHeight % 16)
-            
+            // Lấy kích thước màn hình chuẩn
+            let screenBounds = UIScreen.main.bounds
             let videoSettings: [String: Any] = [
                 AVVideoCodecKey: AVVideoCodecType.h264,
-                AVVideoWidthKey: validWidth,
-                AVVideoHeightKey: validHeight
+                AVVideoWidthKey: screenBounds.width * UIScreen.main.scale,
+                AVVideoHeightKey: screenBounds.height * UIScreen.main.scale,
+                AVVideoCompressionPropertiesKey: [
+                    AVVideoAverageBitRateKey: 6000000, // Tăng chất lượng video
+                    AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel
+                ]
             ]
             
             let input = AVAssetWriterInput(mediaType: .video, outputSettings: videoSettings)
@@ -50,18 +51,10 @@ class SampleHandler: RPBroadcastSampleHandler {
             
             if writer.canAdd(input) {
                 writer.add(input)
-            } else {
-                finishBroadcastWithError(NSError(domain: "SampleHandler", code: -2, userInfo: [NSLocalizedDescriptionKey: "Không thể thêm đầu vào video."]))
-                return
-            }
-            
-            if writer.startWriting() {
                 self.assetWriter = writer
                 self.videoInput = input
                 self.isRecording = true
-            } else {
-                let errorMsg = writer.error?.localizedDescription ?? "Lỗi không xác định"
-                finishBroadcastWithError(NSError(domain: "SampleHandler", code: -3, userInfo: [NSLocalizedDescriptionKey: "Writer không thể bắt đầu: \(errorMsg)"]))
+                self.sessionStarted = false // Reset lại khi bắt đầu
             }
         } catch {
             finishBroadcastWithError(error)
@@ -69,16 +62,21 @@ class SampleHandler: RPBroadcastSampleHandler {
     }
     
     override func processSampleBuffer(_ sampleBuffer: CMSampleBuffer, with sampleBufferType: RPSampleBufferType) {
-        guard isRecording, let writer = assetWriter else { return }
+        guard isRecording, let writer = assetWriter, let input = videoInput else { return }
         
         switch sampleBufferType {
         case .video:
+            // QUAN TRỌNG: Chỉ startWriting và startSession khi nhận được buffer video đầu tiên
             if writer.status == .unknown {
-                let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
-                writer.startSession(atSourceTime: pts)
+                if writer.startWriting() {
+                    let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+                    writer.startSession(atSourceTime: pts)
+                    sessionStarted = true
+                }
             }
-            if writer.status == .writing && videoInput?.isReadyForMoreMediaData == true {
-                videoInput?.append(sampleBuffer)
+            
+            if writer.status == .writing && input.isReadyForMoreMediaData && sessionStarted {
+                input.append(sampleBuffer)
             }
         default: break
         }
@@ -88,30 +86,27 @@ class SampleHandler: RPBroadcastSampleHandler {
         isRecording = false
         videoInput?.markAsFinished()
         
-        // 3. XỬ LÝ COPY FILE SAU KHI GHI XONG
         assetWriter?.finishWriting { [weak self] in
             guard let self = self, let tempURL = self.tempVideoURL else { return }
             
-            // Lấy đường dẫn App Group
-            guard let sharedContainer = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: "group.com.quickcapture.com") else {
-                print("Lỗi: Không tìm thấy App Group để copy file sang.")
-                return
-            }
-            
-            // Đảm bảo thư mục App Group tồn tại
-            try? FileManager.default.createDirectory(at: sharedContainer, withIntermediateDirectories: true, attributes: nil)
-            
-            let finalURL = sharedContainer.appendingPathComponent(self.currentFileName)
-            
-            do {
-                // Di chuyển file từ thư mục Temp sang thư mục App Group
-                if FileManager.default.fileExists(atPath: finalURL.path) {
-                    try FileManager.default.removeItem(at: finalURL)
+            if let sharedContainer = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: "group.com.quickcapture.com") {
+                let finalURL = sharedContainer.appendingPathComponent(self.currentFileName)
+                
+                do {
+                    if FileManager.default.fileExists(atPath: finalURL.path) {
+                        try? FileManager.default.removeItem(at: finalURL)
+                    }
+                    try FileManager.default.moveItem(at: tempURL, to: finalURL)
+                    
+                    // CẬP NHẬT FLAG: Chỉ khi lưu xong xuôi mới báo có video mới
+                    if let userDefaults = UserDefaults(suiteName: "group.com.quickcapture.com") {
+                        userDefaults.set(true, forKey: "hasNewVideo")
+                        userDefaults.set(false, forKey: "isRecordingActive")
+                        userDefaults.synchronize()
+                    }
+                } catch {
+                    print("Lỗi lưu file: \(error)")
                 }
-                try FileManager.default.moveItem(at: tempURL, to: finalURL)
-                print("Thành công: Đã chuyển file sang App Group tại \(finalURL.path)")
-            } catch {
-                print("Lỗi copy file: \(error.localizedDescription)")
             }
         }
     }

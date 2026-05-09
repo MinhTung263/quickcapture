@@ -64,6 +64,37 @@ import ReplayKit
                 } else {
                     result("Lỗi: Không nhận được đường dẫn video")
                 }
+            case "deleteVideo" :
+                // Lấy đường dẫn file từ đối số truyền vào
+                guard let args = call.arguments as? [String: Any],
+                      let filePath = args["path"] as? String else {
+                    result(FlutterError(code: "INVALID_ARGUMENTS", message: "Path is missing", details: nil))
+                    return
+                }
+                
+                let fileManager = FileManager.default
+                if fileManager.fileExists(atPath: filePath) {
+                    do {
+                        try fileManager.removeItem(atPath: filePath)
+                        result(true) // Xóa thành công
+                    } catch {
+                        result(FlutterError(code: "DELETE_FAILED", message: "Could not delete file", details: error.localizedDescription))
+                    }
+                } else {
+                    result(false) // File không tồn tại
+                }
+            case "checkNewVideoStatus":
+                if let userDefaults = UserDefaults(suiteName: "group.com.quickcapture.com") {
+                    let hasNew = userDefaults.bool(forKey: "hasNewVideo")
+                    if hasNew {
+                        userDefaults.set(false, forKey: "hasNewVideo") // Reset flag
+                        userDefaults.synchronize()
+                    }
+                    result(hasNew)
+                } else {
+                    result(false)
+                }
+            
                 
             default:
                 result(FlutterMethodNotImplemented)
