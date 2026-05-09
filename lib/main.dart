@@ -3,7 +3,6 @@ import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:video_player/video_player.dart';
 
 import 'video_player_screen.dart';
 
@@ -50,7 +49,8 @@ class _ScreenRecordAppState extends State<ScreenRecordApp>
   List<String> videoPaths = [];
   bool isLoading = false;
   bool isRecording = false;
-
+  List<String> selectedPaths = []; // Lưu danh sách các file đang được chọn
+  bool isSelectionMode = false;
   @override
   void initState() {
     super.initState();
@@ -108,6 +108,34 @@ class _ScreenRecordAppState extends State<ScreenRecordApp>
       if (mounted) setState(() => status = result);
     } catch (e) {
       _showSnackBar("Lỗi: $e", isError: true);
+    }
+  }
+
+  Future<void> deleteMultipleVideos() async {
+    if (selectedPaths.isEmpty) return;
+
+    _showLoadingDialog("Đang xóa ${selectedPaths.length} video...");
+
+    try {
+      int successCount = 0;
+      for (String path in selectedPaths) {
+        final bool success = await channel.invokeMethod("deleteVideo", {
+          "path": path,
+        });
+        if (success) successCount++;
+      }
+
+      if (mounted) Navigator.pop(context); // Đóng loading
+      _showSnackBar("Đã xóa thành công $successCount video");
+
+      setState(() {
+        isSelectionMode = false;
+        selectedPaths.clear();
+      });
+      loadVideoList();
+    } catch (e) {
+      if (mounted) Navigator.pop(context);
+      _showSnackBar("Lỗi khi xóa: $e", isError: true);
     }
   }
 
@@ -279,48 +307,199 @@ class _ScreenRecordAppState extends State<ScreenRecordApp>
     );
   }
 
+  void _confirmBulkDelete() {
+    showDialog(
+      context: context,
+      builder: (context) => Dialog(
+        backgroundColor: Colors.white,
+        surfaceTintColor: Colors.transparent,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(32)),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(24, 32, 24, 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // 1. Icon cảnh báo với hiệu ứng Gradient mờ
+              Container(
+                width: 80,
+                height: 80,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFF3B30).withOpacity(0.1),
+                  shape: BoxShape.circle,
+                ),
+                child: const Center(
+                  child: Icon(
+                    Icons.delete_sweep_rounded,
+                    color: Color(0xFFFF3B30),
+                    size: 42,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 24),
+
+              // 2. Tiêu đề mạnh mẽ
+              Text(
+                "Xóa ${selectedPaths.length} video?",
+                style: const TextStyle(
+                  fontSize: 22,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: -0.5,
+                ),
+              ),
+              const SizedBox(height: 12),
+
+              // 3. Nội dung diễn giải tinh tế
+              RichText(
+                textAlign: TextAlign.center,
+                text: TextSpan(
+                  style: TextStyle(
+                    fontSize: 15,
+                    color: Colors.grey[600],
+                    height: 1.5,
+                    fontFamily: 'Roboto',
+                  ),
+                  children: [
+                    const TextSpan(text: "Hành động này sẽ "),
+                    const TextSpan(
+                      text: "xóa vĩnh viễn",
+                      style: TextStyle(
+                        color: Color(0xFFFF3B30),
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const TextSpan(
+                      text:
+                          " các tệp đã chọn khỏi thiết bị và không thể hoàn tác.",
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 32),
+
+              // 4. Nhóm nút bấm xếp dọc (iOS Style) để tập trung hành động
+              Column(
+                children: [
+                  // Nút Xóa (Primary)
+                  SizedBox(
+                    width: double.infinity,
+                    height: 55,
+                    child: ElevatedButton(
+                      onPressed: () {
+                        Navigator.pop(context);
+                        deleteMultipleVideos();
+                      },
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFFFF3B30),
+                        foregroundColor: Colors.white,
+                        elevation: 0,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                      ),
+                      child: const Text(
+                        "Xóa tất cả",
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+
+                  // Nút Hủy (Secondary)
+                  SizedBox(
+                    width: double.infinity,
+                    height: 55,
+                    child: TextButton(
+                      onPressed: () => Navigator.pop(context),
+                      style: TextButton.styleFrom(
+                        foregroundColor: Colors.grey[600],
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                      ),
+                      child: const Text(
+                        "Để lại sau",
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Icons.camera_rounded, color: Color(0xFFFF3B30), size: 24),
-            SizedBox(width: 8),
-            Text(
-              "Quick Capture",
-              style: TextStyle(
-                fontWeight: FontWeight.w800,
-                fontSize: 20,
-                letterSpacing: -0.5,
+        title: isSelectionMode
+            ? Text(
+                "Đã chọn ${selectedPaths.length}",
+                style: const TextStyle(fontWeight: FontWeight.w800),
+              )
+            : const Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Icons.camera_rounded,
+                    color: Color(0xFFFF3B30),
+                    size: 24,
+                  ),
+                  SizedBox(width: 8),
+                  Text(
+                    "Quick Capture",
+                    style: TextStyle(fontWeight: FontWeight.w800, fontSize: 20),
+                  ),
+                ],
               ),
-            ),
-          ],
-        ),
         centerTitle: true,
-        elevation: 0,
-        backgroundColor: Colors.white,
-        surfaceTintColor: Colors.transparent, // Ngăn chặn đổi màu khi cuộn
+        leading: isSelectionMode
+            ? IconButton(
+                icon: const Icon(Icons.close_rounded),
+                onPressed: () => setState(() {
+                  isSelectionMode = false;
+                  selectedPaths.clear();
+                }),
+              )
+            : null,
         actions: [
-          if (isLoading)
-            const Padding(
-              padding: EdgeInsets.only(right: 20),
-              child: Center(
-                child: SizedBox(
-                  width: 20,
-                  height: 20,
-                  child: CircularProgressIndicator(strokeWidth: 2.5),
-                ),
-              ),
-            )
-          else
+          if (isSelectionMode && selectedPaths.isNotEmpty)
             IconButton(
-              icon: const Icon(Icons.refresh_rounded, color: Colors.black87),
-              onPressed: loadVideoList,
-              tooltip: 'Làm mới',
+              icon: const Icon(
+                Icons.delete_sweep_rounded,
+                color: Color(0xFFFF3B30),
+              ),
+              onPressed: _confirmBulkDelete, // Hàm xác nhận bên dưới
+            )
+          else if (!isSelectionMode)
+            Container(
+              margin: const EdgeInsets.only(right: 8),
+              decoration: BoxDecoration(
+                color: Colors.black.withOpacity(0.05),
+                shape: BoxShape.circle,
+              ),
+              child: IconButton(
+                icon: const Icon(
+                  Icons.autorenew_rounded,
+                  color: Colors.black87,
+                  size: 22,
+                ),
+                onPressed: loadVideoList,
+                tooltip: 'Làm mới',
+              ),
             ),
         ],
+        backgroundColor: Colors.white,
+        elevation: 0,
       ),
       body: Column(
         children: [
@@ -529,104 +708,136 @@ class _ScreenRecordAppState extends State<ScreenRecordApp>
         final path = videoPaths[index];
         final fileName = path.split('/').last;
 
-        return Container(
-          margin: const EdgeInsets.only(bottom: 14),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(20),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.03),
-                blurRadius: 10,
-                offset: const Offset(0, 4),
-              ),
-            ],
-          ),
-          child: ListTile(
-            contentPadding: const EdgeInsets.symmetric(
-              horizontal: 16,
-              vertical: 10,
-            ),
-            onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => VideoPlayerScreen(
-                    videoPath: path,
-                    videoName: fileName.replaceAll(".mp4", ""),
-                  ),
+        return GestureDetector(
+          onLongPress: () {
+            if (!isSelectionMode) {
+              setState(() {
+                isSelectionMode = true;
+                selectedPaths.add(path);
+              });
+            }
+          },
+          child: Container(
+            margin: const EdgeInsets.only(bottom: 14),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(20),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.03),
+                  blurRadius: 10,
+                  offset: const Offset(0, 4),
                 ),
-              );
-            },
-            leading: Container(
-              height: 55,
-              width: 55,
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  colors: [Color(0xFFFF5E5E), Color(0xFFFF3B30)],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                ),
-                borderRadius: BorderRadius.circular(14),
-                boxShadow: [
-                  BoxShadow(
-                    color: const Color(0xFFFF3B30).withOpacity(0.3),
-                    blurRadius: 8,
-                    offset: const Offset(0, 3),
-                  ),
-                ],
-              ),
-              child: const Icon(
-                Icons.play_arrow_rounded,
-                color: Colors.white,
-                size: 32,
-              ),
+              ],
             ),
-            title: Text(
-              fileName.replaceAll(".mp4", ""),
-              style: const TextStyle(
-                fontWeight: FontWeight.w700,
-                fontSize: 15,
-                color: Colors.black87,
+            child: ListTile(
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 16,
+                vertical: 10,
               ),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-            subtitle: Padding(
-              padding: const EdgeInsets.only(top: 6.0),
-              child: Row(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 6,
-                      vertical: 2,
-                    ),
-                    decoration: BoxDecoration(
-                      color: Colors.grey[100],
-                      borderRadius: BorderRadius.circular(4),
-                    ),
-                    child: const Text(
-                      "MP4",
-                      style: TextStyle(
-                        fontSize: 10,
-                        fontWeight: FontWeight.w800,
-                        color: Colors.grey,
+              onTap: () {
+                if (isSelectionMode) {
+                  setState(() {
+                    selectedPaths.contains(path)
+                        ? selectedPaths.remove(path)
+                        : selectedPaths.add(path);
+                    if (selectedPaths.isEmpty) isSelectionMode = false;
+                  });
+                } else {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => VideoPlayerScreen(
+                        videoPath: path,
+                        videoName: fileName.replaceAll(".mp4", ""),
                       ),
                     ),
-                  ),
-                  const SizedBox(width: 8),
-                  Text(
-                    _getFileSize(path),
-                    style: TextStyle(
-                      fontSize: 13,
-                      color: Colors.grey[600],
-                      fontWeight: FontWeight.w500,
+                  );
+                }
+              },
+              leading: isSelectionMode
+                  ? Checkbox(
+                      value: selectedPaths.contains(path),
+                      activeColor: const Color(0xFFFF3B30),
+                      onChanged: (val) {
+                        setState(() {
+                          val!
+                              ? selectedPaths.add(path)
+                              : selectedPaths.remove(path);
+                          if (selectedPaths.isEmpty) isSelectionMode = false;
+                        });
+                      },
+                    )
+                  : Container(
+                      height: 55,
+                      width: 55,
+                      decoration: BoxDecoration(
+                        gradient: const LinearGradient(
+                          colors: [Color(0xFFFF5E5E), Color(0xFFFF3B30)],
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                        ),
+                        borderRadius: BorderRadius.circular(14),
+                        boxShadow: [
+                          BoxShadow(
+                            color: const Color(0xFFFF3B30).withOpacity(0.3),
+                            blurRadius: 8,
+                            offset: const Offset(0, 3),
+                          ),
+                        ],
+                      ),
+                      child: const Icon(
+                        Icons.play_arrow_rounded,
+                        color: Colors.white,
+                        size: 32,
+                      ),
                     ),
-                  ),
-                ],
+              title: Text(
+                fileName.replaceAll(".mp4", ""),
+                style: const TextStyle(
+                  fontWeight: FontWeight.w700,
+                  fontSize: 15,
+                  color: Colors.black87,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
               ),
+              subtitle: Padding(
+                padding: const EdgeInsets.only(top: 6.0),
+                child: Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 6,
+                        vertical: 2,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.grey[100],
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: const Text(
+                        "MP4",
+                        style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w800,
+                          color: Colors.grey,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      _getFileSize(path),
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: Colors.grey[600],
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              trailing: _buildItemMenu(path, fileName),
             ),
-            trailing: _buildItemMenu(path, fileName),
           ),
         );
       },
