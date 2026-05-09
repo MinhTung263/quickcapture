@@ -1,18 +1,10 @@
 import UIKit
 import Flutter
-import ReplayKit
-import AVFoundation
 import Photos
+import ReplayKit
 
 @main
 @objc class AppDelegate: FlutterAppDelegate {
-    
-    var assetWriter: AVAssetWriter?
-    var videoInput: AVAssetWriterInput?
-    var audioInput: AVAssetWriterInput?
-    var isRecording = false
-    var videoUrl: URL?
-
     override func application(
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
@@ -21,148 +13,111 @@ import Photos
         // 1. Đăng ký plugin
         GeneratedPluginRegistrant.register(with: self)
         
-        // 2. Lấy luồng giao tiếp thẳng từ Registrar (Tuyệt đối an toàn, không lo văng app)
+        // 2. Lấy luồng giao tiếp thẳng từ Registrar
         let registrar = self.registrar(forPlugin: "QuickCaptureApp")!
         let channel = FlutterMethodChannel(name: "quick_capture", binaryMessenger: registrar.messenger())
         
-        // 3. Đăng ký lắng nghe sự kiện
-        channel.setMethodCallHandler { [weak self] (call, result) in
-                        guard let self = self else { return }
-                        
-                        if call.method == "startRecord" {
-                            self.startRecording(result: result)
-                        }
-                        else if call.method == "stopRecord" {
-                            // Khi dùng Broadcast, iOS không cho phép tắt bằng code từ app chính.
-                            // Người dùng phải tự bấm vào thanh màu đỏ trên cùng màn hình iPhone để dừng.
-                            // Khi dừng, Extension sẽ tự động chạy code lưu file vào Ảnh.
-                            result("Hãy chạm vào biểu tượng màu đỏ trên thanh trạng thái (góc trên màn hình) để dừng quay.")
-                        }
-                        else if call.method == "saveVideoFromExtension" {
-                            self.saveVideoFromAppGroup(result: result)
-                        }
-                        
-                        else {
-                            result(FlutterMethodNotImplemented)
-                        }
-                    }
+        channel.setMethodCallHandler({ (call: FlutterMethodCall, result: @escaping FlutterResult) in
+            switch call.method {
+            case "startRecord":
+                if #available(iOS 12.0, *) {
+                                    DispatchQueue.main.async {
+                                        // Lấy cửa sổ giao diện hiện tại của App
+                                        guard let window = UIApplication.shared.windows.first(where: { $0.isKeyWindow }) else {
+                                            result("Lỗi: Không tìm thấy giao diện")
+                                            return
+                                        }
+                                        
+                                        // 1. Tạo Picker với kích thước thật (thay vì .zero)
+                                        let pickerView = RPSystemBroadcastPickerView(frame: CGRect(x: 0, y: 0, width: 50, height: 50))
+                                        pickerView.showsMicrophoneButton = false
+                                        pickerView.preferredExtension = "com.quickcapture.vn.QuickCaptureExt" // Bundle ID của bạn
+                                        
+                                        // 2. Ép nó phải ẩn đi (để user không thấy) nhưng VẪN NẰM TRONG VIEW HIERARCHY
+                                        pickerView.alpha = 0.01
+                                        window.addSubview(pickerView)
+                                        
+                                        // 3. Thực hiện click giả
+                                        for view in pickerView.subviews {
+                                            if let button = view as? UIButton {
+                                                button.sendActions(for: .touchUpInside) // Dùng touchUpInside thay vì allEvents
+                                                break
+                                            }
+                                        }
+                                        
+                                        // 4. Dọn dẹp: Xóa nút mồi này đi sau 1 giây để không rác bộ nhớ
+                                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                                            pickerView.removeFromSuperview()
+                                        }
+                                    }
+                                    result("Đang mở trình quay...")
+                } else {
+                    result("iOS không hỗ trợ")
+                }
+                
+            case "getVideoList":
+                self.getVideoList(result: result)
+                
+            case "saveSpecificVideo":
+                if let args = call.arguments as? [String: Any], let path = args["path"] as? String {
+                    self.saveSpecificVideo(path: path, result: result)
+                } else {
+                    result("Lỗi: Không nhận được đường dẫn video")
+                }
+                
+            default:
+                result(FlutterMethodNotImplemented)
+            }
+        })
         
         return super.application(application, didFinishLaunchingWithOptions: launchOptions)
     }
-    
-    func startRecording(result: @escaping FlutterResult) {
-            // Tạo view picker của Apple ẩn dưới nền
-            let broadcastPicker = RPSystemBroadcastPickerView(frame: CGRect(x: 0, y: 0, width: 50, height: 50))
-            
-            // ⚠️ QUAN TRỌNG: ĐIỀN ĐÚNG BUNDLE ID CỦA CÁI EXTENSION BẠN VỪA TẠO TRONG XCODE VÀO ĐÂY
-            broadcastPicker.preferredExtension = "group.com.quickcapture.com"
-            broadcastPicker.showsMicrophoneButton = true // Cho phép user chọn bật/tắt mic hệ thống
-            
-            // Mẹo mô phỏng thao tác bấm để hiện thẳng popup lên màn hình
-            if let button = broadcastPicker.subviews.first(where: { $0 is UIButton }) as? UIButton {
-                button.sendActions(for: .allEvents)
-                result(nil)
-            } else {
-                result(FlutterError(code: "ERR", message: "Không mở được công cụ quay hệ thống", details: nil))
-            }
-        }
-    func stopRecording(result: @escaping FlutterResult) {
-        if !isRecording {
-            result(FlutterError(code: "NOT_RECORDING", message: "Chưa quay màn hình", details: nil))
+
+    private func getVideoList(result: @escaping FlutterResult) {
+        guard let sharedContainer = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: "group.com.quickcapture.com") else {
+            result([])
             return
         }
         
-        let recorder = RPScreenRecorder.shared()
-        recorder.stopCapture { error in
-            self.isRecording = false
-            self.videoInput?.markAsFinished()
-            self.audioInput?.markAsFinished()
+        do {
+            let fileURLs = try FileManager.default.contentsOfDirectory(at: sharedContainer, includingPropertiesForKeys: [.creationDateKey])
+            let videoPaths = fileURLs
+                .filter { $0.pathExtension == "mp4" }
+                .sorted { u1, u2 in
+                    let date1 = (try? u1.resourceValues(forKeys: [.creationDateKey]))?.creationDate ?? Date.distantPast
+                    let date2 = (try? u2.resourceValues(forKeys: [.creationDateKey]))?.creationDate ?? Date.distantPast
+                    return date1 > date2
+                }
+                .map { $0.path }
             
-            self.assetWriter?.finishWriting {
-                if let error = error {
-                    result(FlutterError(code: "STOP_ERROR", message: error.localizedDescription, details: nil))
-                    return
-                }
-                
-                guard let url = self.videoUrl else {
-                    result(FlutterError(code: "URL_ERROR", message: "Không tìm thấy đường dẫn video", details: nil))
-                    return
-                }
-                
-                // Lưu thẳng vào Thư viện ảnh (Gallery) của iOS
-                PHPhotoLibrary.requestAuthorization { status in
-                    if #available(iOS 14, *) {
-                        if status == .authorized || status == .limited {
-                            PHPhotoLibrary.shared().performChanges({
-                                PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: url)
-                            }) { saved, error in
-                                DispatchQueue.main.async {
-                                    if saved {
-                                        result("Đã lưu vào Ảnh (Photos) iOS")
-                                    } else {
-                                        // BÁO LỖI THỰC TẾ RA MÀN HÌNH FLUTTER
-                                        let errorMessage = error?.localizedDescription ?? "Lỗi hệ thống không xác định"
-                                        result("Lỗi lưu Ảnh: \(errorMessage)")
-                                    }
-                                }
-                            }
-                        } else {
-                            DispatchQueue.main.async {
-                                result("Chưa cấp quyền Ảnh. File tạm: \(url.path)")
-                            }
-                        }
+            result(videoPaths)
+        } catch {
+            result([])
+        }
+    }
+
+    private func saveSpecificVideo(path: String, result: @escaping FlutterResult) {
+        let videoURL = URL(fileURLWithPath: path)
+        
+        if !FileManager.default.fileExists(atPath: path) {
+            result("Không tìm thấy file video này.")
+            return
+        }
+
+        PHPhotoLibrary.requestAuthorization { status in
+            if status == .authorized {
+                PHPhotoLibrary.shared().performChanges({
+                    PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: videoURL)
+                }) { success, error in
+                    if success {
+                        result("Thành công")
                     } else {
-                        // Fallback on earlier versions
+                        result("Lỗi lưu ảnh: \(error?.localizedDescription ?? "Không xác định")")
                     }
                 }
+            } else {
+                result("Ứng dụng cần quyền truy cập Ảnh.")
             }
         }
     }
-    func saveVideoFromAppGroup(result: @escaping FlutterResult) {
-            // Trỏ đúng vào App Group của bạn
-            guard let sharedContainer = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: "group.com.quickcapture.com") else {
-                result(FlutterError(code: "ERR", message: "Không tìm thấy App Group", details: nil))
-                return
-            }
-            
-            do {
-                let files = try FileManager.default.contentsOfDirectory(at: sharedContainer, includingPropertiesForKeys: nil)
-                // Lọc ra các file MP4
-                let videoFiles = files.filter { $0.pathExtension == "mp4" }
-                
-                if videoFiles.isEmpty {
-                    result("Không tìm thấy video nào vừa quay.")
-                    return
-                }
-                
-                // Lấy file mới nhất
-                if let latestVideo = videoFiles.sorted(by: { $0.path > $1.path }).first {
-                    
-                    // Dùng App Chính để lưu vào Ảnh (An toàn 100%)
-                    PHPhotoLibrary.requestAuthorization { status in
-                        if #available(iOS 14, *) {
-                            if status == .authorized || status == .limited {
-                                PHPhotoLibrary.shared().performChanges({
-                                    PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: latestVideo)
-                                }) { saved, error in
-                                    if saved {
-                                        // Xoá file tạm trong App Group cho nhẹ máy
-                                        try? FileManager.default.removeItem(at: latestVideo)
-                                        DispatchQueue.main.async { result("✅ Đã chép video vào Ảnh thành công!") }
-                                    } else {
-                                        DispatchQueue.main.async { result("❌ Lỗi lưu ảnh: \(error?.localizedDescription ?? "")") }
-                                    }
-                                }
-                            } else {
-                                DispatchQueue.main.async { result("❌ App chưa có quyền truy cập Ảnh") }
-                            }
-                        } else {
-                            // Fallback on earlier versions
-                        }
-                    }
-                }
-            } catch {
-                result(FlutterError(code: "ERR", message: "Lỗi đọc thư mục App Group", details: nil))
-            }
-        }
 }
