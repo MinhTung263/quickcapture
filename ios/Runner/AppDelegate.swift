@@ -5,6 +5,7 @@ import ReplayKit
 
 @main
 @objc class AppDelegate: FlutterAppDelegate {
+    var channel: FlutterMethodChannel?
     override func application(
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
@@ -15,9 +16,9 @@ import ReplayKit
         
         // 2. Lấy luồng giao tiếp thẳng từ Registrar
         let registrar = self.registrar(forPlugin: "QuickCaptureApp")!
-        let channel = FlutterMethodChannel(name: "quick_capture", binaryMessenger: registrar.messenger())
+        channel = FlutterMethodChannel(name: "quick_capture", binaryMessenger: registrar.messenger())
         
-        channel.setMethodCallHandler({ (call: FlutterMethodCall, result: @escaping FlutterResult) in
+        channel?.setMethodCallHandler({ (call: FlutterMethodCall, result: @escaping FlutterResult) in
             switch call.method {
             case "startRecord":
                 if #available(iOS 12.0, *) {
@@ -101,16 +102,50 @@ import ReplayKit
                 } else {
                     result(false)
                 }
-                
+            case "stopRecord":
+                // Ghi mật lệnh ép dừng vào App Group để Extension đọc được
+                if let userDefaults = UserDefaults(suiteName: "group.com.quickcapture.com") {
+                    userDefaults.set(true, forKey: "forceStopCommand")
+                    userDefaults.synchronize()
+                }
+                // Trả về cho Flutter biết
+                result("IOS_FORCE_STOPPING")
                 
             default:
                 result(FlutterMethodNotImplemented)
             }
         })
-        
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(screenCaptureStateChanged),
+            name: UIScreen.capturedDidChangeNotification,
+            object: nil
+        )
         return super.application(application, didFinishLaunchingWithOptions: launchOptions)
     }
-    
+    // 🚀 HÀM GỬI TÍN HIỆU SANG FLUTTER KHI TRẠNG THÁI MÀN HÌNH THAY ĐỔI
+    @objc func screenCaptureStateChanged() {
+        if UIScreen.main.isCaptured {
+            // Thanh đỏ hiện lên -> Bắt đầu quay
+            channel?.invokeMethod("onRecordingStarted", arguments: nil)
+        } else {
+            // Thanh đỏ đã biến mất -> Dừng quay
+            if let userDefaults = UserDefaults(suiteName: "group.com.quickcapture.com") {
+                let hasNew = userDefaults.bool(forKey: "hasNewVideo")
+                if hasNew {
+                    // Reset cờ và báo cho Flutter load video
+                    userDefaults.set(false, forKey: "hasNewVideo")
+                    userDefaults.synchronize()
+                    channel?.invokeMethod("onVideoSaved", arguments: nil)
+                } else {
+                    // Tắt quay nhưng không có video (do hủy hoặc lỗi)
+                    channel?.invokeMethod("onRecordingStopped", arguments: nil)
+                }
+            } else {
+                channel?.invokeMethod("onRecordingStopped", arguments: nil)
+            }
+        }
+    }
     private func getVideoList(result: @escaping FlutterResult) {
         guard let sharedContainer = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: "group.com.quickcapture.com") else {
             result([])
@@ -141,6 +176,7 @@ import ReplayKit
             result("Không tìm thấy file video này.")
             return
         }
+        
         
         PHPhotoLibrary.requestAuthorization { status in
             if status == .authorized {

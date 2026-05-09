@@ -8,7 +8,7 @@ class SampleHandler: RPBroadcastSampleHandler {
     private var tempVideoURL: URL?
     private var currentFileName: String = ""
     private var sessionStarted = false
-    
+    private var stopCheckTimer: Timer?
     override func broadcastStarted(withSetupInfo setupInfo: [String : NSObject]?) {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyyMMdd_HHmmss"
@@ -57,8 +57,28 @@ class SampleHandler: RPBroadcastSampleHandler {
         } catch {
             finishBroadcastWithError(error)
         }
+        DispatchQueue.main.async {
+            self.stopCheckTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+                self?.checkForStopCommand()
+            }
+        }
     }
-    
+    @objc private func checkForStopCommand() {
+        if let userDefaults = UserDefaults(suiteName: "group.com.quickcapture.com"),
+           userDefaults.bool(forKey: "forceStopCommand") {
+            
+            // Xóa lệnh
+            userDefaults.set(false, forKey: "forceStopCommand")
+            userDefaults.synchronize()
+            
+            // Hủy timer
+            stopCheckTimer?.invalidate()
+            stopCheckTimer = nil
+            
+            // Gọi hàm ép dừng đã viết lần trước
+            forceStopAndSave()
+        }
+    }
     override func processSampleBuffer(_ sampleBuffer: CMSampleBuffer, with sampleBufferType: RPSampleBufferType) {
         guard isRecording, let writer = assetWriter, let input = videoInput else { return }
         
@@ -78,11 +98,51 @@ class SampleHandler: RPBroadcastSampleHandler {
         default: break
         }
     }
-    
-    override func broadcastFinished() {
+    // 3. THÊM HÀM MỚI NÀY VÀO TRONG CLASS SampleHandler
+    private func forceStopAndSave() {
         isRecording = false
         videoInput?.markAsFinished()
         
+        if let writer = assetWriter, writer.status == .writing {
+            let semaphore = DispatchSemaphore(value: 0)
+            
+            writer.finishWriting { [weak self] in
+                defer { semaphore.signal() }
+                guard let self = self, let tempURL = self.tempVideoURL else { return }
+                
+                if let sharedContainer = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: "group.com.quickcapture.com") {
+                    let finalURL = sharedContainer.appendingPathComponent(self.currentFileName)
+                    
+                    do {
+                        if FileManager.default.fileExists(atPath: finalURL.path) {
+                            try? FileManager.default.removeItem(at: finalURL)
+                        }
+                        try FileManager.default.moveItem(at: tempURL, to: finalURL)
+                        
+                        // Bật cờ báo có video mới
+                        if let userDefaults = UserDefaults(suiteName: "group.com.quickcapture.com") {
+                            userDefaults.set(true, forKey: "hasNewVideo")
+                            userDefaults.set(false, forKey: "isRecordingActive")
+                            userDefaults.synchronize()
+                        }
+                    } catch {
+                        print("Lỗi ép lưu: \(error)")
+                    }
+                }
+            }
+            
+            _ = semaphore.wait(timeout: .now() + 5.0)
+        }
+        
+        // ĐÂY LÀ ĐÒN QUYẾT ĐỊNH: Quăng một lỗi giả để hệ thống iOS tự dập tắt cái Extension này đi
+        let error = NSError(domain: "QuickCapture", code: 0, userInfo: [NSLocalizedFailureReasonErrorKey: "Đã lưu video thành công qua App."])
+        self.finishBroadcastWithError(error)
+    }
+    override func broadcastFinished() {
+        isRecording = false
+        videoInput?.markAsFinished()
+        stopCheckTimer?.invalidate()
+        stopCheckTimer = nil
         guard let writer = assetWriter else { return }
         
         if writer.status == .writing {

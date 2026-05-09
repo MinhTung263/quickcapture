@@ -34,7 +34,7 @@ class _ScreenRecordAppState extends State<ScreenRecordApp>
   String status = "Sẵn sàng";
   List<String> videoPaths = [];
   bool isLoading = false;
-
+  bool isRecording = false;
   @override
   void initState() {
     super.initState();
@@ -50,13 +50,33 @@ class _ScreenRecordAppState extends State<ScreenRecordApp>
       switch (call.method) {
         case "onVideoSaved":
           if (mounted) {
-            setState(() => status = "Đã lưu video! Đang làm mới...");
-            // Thêm 'await' để đảm bảo quá trình load chạy đồng bộ, tránh đụng độ UI
+            setState(() {
+              isRecording = false; // 🚀 Trả nút về trạng thái Bắt đầu
+              status = "Đã lưu video! Đang làm mới...";
+            });
             await loadVideoList();
           }
           break;
         // Rất dễ dàng thêm các tín hiệu khác từ Android/iOS ở đây sau này
         // case "onError": ...
+        case "onRecordingStarted":
+          if (mounted) {
+            setState(() {
+              isRecording = true;
+              status = "🔴 Đang ghi hình...";
+            });
+          }
+          break;
+
+        // 🚀 THÊM CASE NÀY: Xử lý khi thanh đỏ tắt nhưng không có video
+        case "onRecordingStopped":
+          if (mounted) {
+            setState(() {
+              isRecording = false;
+              status = "Sẵn sàng";
+            });
+          }
+          break;
 
         default:
           debugPrint("Chưa xử lý tín hiệu từ Native: ${call.method}");
@@ -76,8 +96,8 @@ class _ScreenRecordAppState extends State<ScreenRecordApp>
 
   Future<void> startRecord() async {
     try {
-      await channel.invokeMethod("startRecord");
-      setState(() => status = "Hãy chọn 'Bắt đầu truyền phát'...");
+      final result = await channel.invokeMethod("startRecord");
+      if (mounted) setState(() => status = result);
     } catch (e) {
       _showSnackBar("Lỗi: $e", isError: true);
     }
@@ -90,19 +110,23 @@ class _ScreenRecordAppState extends State<ScreenRecordApp>
       final bool hasNew = await channel.invokeMethod("checkNewVideoStatus");
 
       if (hasNew) {
+        if (mounted) {
+          setState(() => isRecording = false); // 🚀 Đảm bảo reset nút
+        }
         // NẾU THỰC SỰ CÓ VIDEO MỚI -> MỚI ĐƯỢC XOAY LOADING
         loadVideoList();
       } else {
         // 2. NẾU KHÔNG CÓ VIDEO MỚI -> Chỉ cập nhật lại chữ hiển thị trạng thái
-        final bool isRecording = await channel.invokeMethod("isRecording");
+        final bool recording = await channel.invokeMethod("isRecording");
 
         if (mounted) {
           setState(() {
+            isRecording = recording; // 🚀 Cập nhật trạng thái nút theo hệ thống
             if (isRecording) {
               status = "🔴 Đang ghi hình...";
             } else {
               if (status == "Hãy chọn 'Bắt đầu truyền phát'..." ||
-                  status == "Vui lòng cấp quyền...") {
+                  status.contains("Vui lòng cấp quyền")) {
                 status = "Sẵn sàng";
               }
             }
@@ -113,10 +137,10 @@ class _ScreenRecordAppState extends State<ScreenRecordApp>
   }
 
   Future<void> loadVideoList() async {
-    // Giữ nguyên logic load có CircularProgressIndicator của bạn
+    if (isLoading) return;
     setState(() {
       isLoading = true;
-      status = "Phát hiện video mới! Đang tải...";
+      if (!status.contains("Đã lưu")) status = "Đang quét video...";
     });
 
     await Future.delayed(const Duration(milliseconds: 1500));
@@ -127,8 +151,8 @@ class _ScreenRecordAppState extends State<ScreenRecordApp>
         setState(() {
           videoPaths = paths?.cast<String>() ?? [];
           status = videoPaths.isEmpty
-              ? "Sẵn sàng"
-              : "Đã cập nhật ${videoPaths.length} video";
+              ? "Chưa có video"
+              : "Tìm thấy ${videoPaths.length} video";
           isLoading = false;
         });
       }
@@ -156,6 +180,26 @@ class _ScreenRecordAppState extends State<ScreenRecordApp>
     }
   }
 
+  Future<void> stopRecord() async {
+    try {
+      final result = await channel.invokeMethod("stopRecord");
+
+      if (result == "IOS_FORCE_STOPPING") {
+        if (mounted) {
+          setState(() {
+            // Chỉ hiển thị trạng thái chờ, tuyệt đối không tự loadVideoList ở đây nữa
+            status = "Đang chờ iOS đóng gói video...";
+          });
+        }
+      } else {
+        // Xử lý cho Android
+        if (mounted) setState(() => status = "Đang dừng và đóng gói video...");
+      }
+    } catch (e) {
+      _showSnackBar("Lỗi: $e", isError: true);
+    }
+  }
+
   Future<void> deleteVideo(String path) async {
     try {
       final bool success = await channel.invokeMethod("deleteVideo", {
@@ -170,13 +214,12 @@ class _ScreenRecordAppState extends State<ScreenRecordApp>
     }
   }
 
-  void _showSnackBar(String message, {bool isError = false}) {
+  void _showSnackBar(String msg, {bool isError = false}) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(message),
-        backgroundColor: isError ? Colors.red[800] : Colors.green[800],
+        content: Text(msg),
+        backgroundColor: isError ? Colors.red : Colors.green,
         behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
       ),
     );
   }
@@ -246,7 +289,7 @@ class _ScreenRecordAppState extends State<ScreenRecordApp>
               children: [
                 _buildStatusBadge(),
                 const SizedBox(height: 20),
-                _buildRecordButton(),
+                _buildRecordPanel(),
               ],
             ),
           ),
@@ -291,40 +334,48 @@ class _ScreenRecordAppState extends State<ScreenRecordApp>
     );
   }
 
-  Widget _buildRecordButton() {
-    return GestureDetector(
-      onTap: startRecord,
-      child: Container(
-        height: 60,
-        width: double.infinity,
-        decoration: BoxDecoration(
-          gradient: const LinearGradient(
-            colors: [Colors.redAccent, Color(0xFFD32F2F)],
+  Widget _buildRecordPanel() {
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.vertical(bottom: Radius.circular(25)),
+      ),
+      child: Column(
+        children: [
+          Text(
+            status,
+            style: const TextStyle(
+              color: Colors.grey,
+              fontSize: 13,
+              fontWeight: FontWeight.bold,
+            ),
           ),
-          borderRadius: BorderRadius.circular(16),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.redAccent.withOpacity(0.3),
-              blurRadius: 12,
-              offset: const Offset(0, 4),
-            ),
-          ],
-        ),
-        child: const Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(Icons.fiber_manual_record, color: Colors.white, size: 28),
-            SizedBox(width: 12),
-            Text(
-              "BẮT ĐẦU GHI HÌNH",
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: 16,
-                fontWeight: FontWeight.w800,
+          const SizedBox(height: 15),
+
+          // 🚀 LOGIC ĐỔI GIAO DIỆN NÚT BẤM
+          ElevatedButton.icon(
+            onPressed: isRecording ? stopRecord : startRecord,
+            style: ElevatedButton.styleFrom(
+              backgroundColor: isRecording
+                  ? Colors.grey[800]
+                  : Colors.redAccent,
+              foregroundColor: Colors.white,
+              minimumSize: const Size(double.infinity, 55),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(15),
               ),
+              elevation: isRecording ? 1 : 4,
             ),
-          ],
-        ),
+            icon: Icon(
+              isRecording ? Icons.stop_rounded : Icons.fiber_manual_record,
+            ),
+            label: Text(
+              isRecording ? "DỪNG GHI HÌNH" : "BẮT ĐẦU GHI HÌNH",
+              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+            ),
+          ),
+        ],
       ),
     );
   }

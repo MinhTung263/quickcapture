@@ -91,6 +91,13 @@ class MainActivity: FlutterActivity() {
                     result.success(hasNew)
                 }
                 "isRecording" -> result.success(prefs.getBoolean("isRecordingActive", false))
+                "stopRecord" -> {
+                    val stopIntent = Intent(this, RecordingService::class.java).apply {
+                        action = "STOP_RECORDING"
+                    }
+                    startService(stopIntent)
+                    result.success("ANDROID_STOPPED")
+                }
                 else -> result.notImplemented()
             }
         }
@@ -104,18 +111,32 @@ class MainActivity: FlutterActivity() {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == SCREEN_RECORD_REQUEST_CODE) {
             val prefs = getSharedPreferences("QuickCapturePrefs", Context.MODE_PRIVATE)
+
             if (resultCode == Activity.RESULT_OK && data != null) {
+                // Người dùng ĐỒNG Ý quay
                 prefs.edit().putBoolean("isRecordingActive", true).apply()
+
                 val serviceIntent = Intent(this, RecordingService::class.java).apply {
                     putExtra("code", resultCode)
                     putExtra("data", data)
                 }
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(serviceIntent)
-                else startService(serviceIntent)
+
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    startForegroundService(serviceIntent)
+                } else {
+                    startService(serviceIntent)
+                }
+
+                // 🚀 THÊM DÒNG NÀY: Báo cho Flutter đổi màu nút thành "DỪNG GHI HÌNH" ngay lập tức
+                methodChannel?.invokeMethod("onRecordingStarted", null)
+
             } else {
-                // QUAN TRỌNG: Nếu Cancel màn hình share, đảm bảo không cắm cờ có video mới
+                // Người dùng bấm HỦY hoặc tắt hộp thoại
                 prefs.edit().putBoolean("isRecordingActive", false)
                     .putBoolean("hasNewVideo", false).apply()
+
+                // 🚀 THÊM DÒNG NÀY: Báo cho Flutter reset nút về "Sẵn sàng"
+                methodChannel?.invokeMethod("onRecordingStopped", null)
             }
         }
     }
