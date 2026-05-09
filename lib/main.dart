@@ -3,6 +3,7 @@ import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:video_player/video_player.dart';
 
 import 'video_player_screen.dart';
 
@@ -143,9 +144,7 @@ class _ScreenRecordAppState extends State<ScreenRecordApp>
       if (!status.contains("Đã lưu")) status = "Đang quét...";
     });
 
-    await Future.delayed(
-      const Duration(milliseconds: 800),
-    ); // Rút ngắn delay cho mượt
+    await Future.delayed(const Duration(milliseconds: 800));
 
     try {
       final List<dynamic>? paths = await channel.invokeMethod("getVideoList");
@@ -355,7 +354,6 @@ class _ScreenRecordAppState extends State<ScreenRecordApp>
           _buildStatusBadge(),
           const SizedBox(height: 35),
 
-          // 🚀 HIỆU ỨNG NÚT BẤM CÓ QUẦNG SÁNG (PULSING)
           GestureDetector(
             onTap: isRecording ? stopRecord : startRecord,
             child: TweenAnimationBuilder<double>(
@@ -366,23 +364,21 @@ class _ScreenRecordAppState extends State<ScreenRecordApp>
                 return Stack(
                   alignment: Alignment.center,
                   children: [
-                    // Vòng sáng tỏa ra khi đang quay
                     if (isRecording)
                       Container(
                         width: 85 * scale,
                         height: 85 * scale,
                         decoration: BoxDecoration(
                           shape: BoxShape.circle,
-                          color: const Color(0xFFFF3B30).withOpacity(
-                            0.15 - ((scale - 1) * 0.5),
-                          ), // Mờ dần khi to ra
+                          color: const Color(
+                            0xFFFF3B30,
+                          ).withOpacity(0.15 - ((scale - 1) * 0.5)),
                         ),
                       ),
 
-                    // Nút bấm thật
                     AnimatedContainer(
                       duration: const Duration(milliseconds: 350),
-                      curve: Curves.easeOutBack, // Hiệu ứng nảy nhẹ
+                      curve: Curves.easeOutBack,
                       width: 80,
                       height: 80,
                       padding: const EdgeInsets.all(4),
@@ -429,7 +425,6 @@ class _ScreenRecordAppState extends State<ScreenRecordApp>
                 );
               },
               onEnd: () {
-                // Tạo vòng lặp hô hấp (breathing effect) khi đang quay
                 if (isRecording && mounted) setState(() {});
               },
             ),
@@ -588,10 +583,7 @@ class _ScreenRecordAppState extends State<ScreenRecordApp>
               ),
             ),
             title: Text(
-              fileName.replaceAll(
-                ".mp4",
-                "",
-              ), // Cắt đuôi .mp4 cho tiêu đề gọn hơn
+              fileName.replaceAll(".mp4", ""),
               style: const TextStyle(
                 fontWeight: FontWeight.w700,
                 fontSize: 15,
@@ -642,51 +634,113 @@ class _ScreenRecordAppState extends State<ScreenRecordApp>
   }
 
   Widget _buildItemMenu(String path, String fileName) {
-    return PopupMenuButton<String>(
-      icon: const Icon(Icons.more_vert_rounded, color: Colors.black45),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      elevation: 4,
-      offset: const Offset(0, 40),
-      onSelected: (val) {
-        if (val == 'save') saveVideoToPhotos(path);
-        if (val == 'delete') _confirmDelete(path, fileName);
-      },
-      itemBuilder: (context) => [
-        const PopupMenuItem(
-          value: 'save',
-          child: Row(
-            children: [
-              Icon(Icons.save_alt_rounded, size: 20, color: Colors.black87),
-              SizedBox(width: 12),
-              Text(
-                "Lưu vào Ảnh",
-                style: TextStyle(fontWeight: FontWeight.w500),
-              ),
-            ],
-          ),
+    return IconButton(
+      icon: const Icon(Icons.more_horiz_rounded, color: Colors.black45),
+      onPressed: () => _showActionSheet(path, fileName),
+    );
+  }
+
+  void _showActionSheet(String path, String fileName) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (context) => Container(
+        padding: const EdgeInsets.fromLTRB(20, 12, 20, 35),
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(35)),
         ),
-        const PopupMenuDivider(),
-        const PopupMenuItem(
-          value: 'delete',
-          child: Row(
-            children: [
-              Icon(
-                Icons.delete_outline_rounded,
-                color: Color(0xFFFF3B30),
-                size: 20,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Handle bar tinh tế
+            Container(
+              width: 36,
+              height: 4,
+              decoration: BoxDecoration(
+                color: Colors.grey[300],
+                borderRadius: BorderRadius.circular(10),
               ),
-              SizedBox(width: 12),
-              Text(
-                "Xóa video",
-                style: TextStyle(
-                  color: Color(0xFFFF3B30),
-                  fontWeight: FontWeight.w600,
+            ),
+            const SizedBox(height: 25),
+
+            // Tên file tinh gọn
+            Text(
+              fileName,
+              style: TextStyle(
+                fontWeight: FontWeight.w900,
+                fontSize: 15,
+                color: Colors.grey[800],
+              ),
+              textAlign: TextAlign.center,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+            const SizedBox(height: 30),
+
+            // Hàng chứa các nút chức năng (Grid)
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              children: [
+                // NÚT LƯU
+                _buildGridAction(
+                  icon: Icons.file_download_outlined,
+                  label: "Lưu vào máy",
+                  color: const Color(0xFF007AFF),
+                  onTap: () {
+                    Navigator.pop(context);
+                    saveVideoToPhotos(path);
+                  },
                 ),
-              ),
-            ],
-          ),
+
+                // NÚT XÓA
+                _buildGridAction(
+                  icon: Icons.delete_outline_rounded,
+                  label: "Xóa video",
+                  color: const Color(0xFFFF3B30),
+                  onTap: () {
+                    Navigator.pop(context);
+                    _confirmDelete(path, fileName);
+                  },
+                ),
+              ],
+            ),
+          ],
         ),
-      ],
+      ),
+    );
+  }
+
+  Widget _buildGridAction({
+    required IconData icon,
+    required String label,
+    required Color color,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Column(
+        children: [
+          Container(
+            width: 75,
+            height: 75,
+            decoration: BoxDecoration(
+              color: color.withOpacity(0.1), // Nền màu pastel nhạt
+              borderRadius: BorderRadius.circular(22), // Bo góc lớn hiện đại
+            ),
+            child: Icon(icon, color: color, size: 32),
+          ),
+          const SizedBox(height: 12),
+          Text(
+            label,
+            style: TextStyle(
+              color: color,
+              fontSize: 13,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ],
+      ),
     );
   }
 
