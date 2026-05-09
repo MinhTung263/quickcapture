@@ -21,36 +21,36 @@ import ReplayKit
             switch call.method {
             case "startRecord":
                 if #available(iOS 12.0, *) {
-                                    DispatchQueue.main.async {
-                                        // Lấy cửa sổ giao diện hiện tại của App
-                                        guard let window = UIApplication.shared.windows.first(where: { $0.isKeyWindow }) else {
-                                            result("Lỗi: Không tìm thấy giao diện")
-                                            return
-                                        }
-                                        
-                                        // 1. Tạo Picker với kích thước thật (thay vì .zero)
-                                        let pickerView = RPSystemBroadcastPickerView(frame: CGRect(x: 0, y: 0, width: 50, height: 50))
-                                        pickerView.showsMicrophoneButton = false
-                                        pickerView.preferredExtension = "com.quickcapture.vn.QuickCaptureExt" // Bundle ID của bạn
-                                        
-                                        // 2. Ép nó phải ẩn đi (để user không thấy) nhưng VẪN NẰM TRONG VIEW HIERARCHY
-                                        pickerView.alpha = 0.01
-                                        window.addSubview(pickerView)
-                                        
-                                        // 3. Thực hiện click giả
-                                        for view in pickerView.subviews {
-                                            if let button = view as? UIButton {
-                                                button.sendActions(for: .touchUpInside) // Dùng touchUpInside thay vì allEvents
-                                                break
-                                            }
-                                        }
-                                        
-                                        // 4. Dọn dẹp: Xóa nút mồi này đi sau 1 giây để không rác bộ nhớ
-                                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                                            pickerView.removeFromSuperview()
-                                        }
-                                    }
-                                    result("Đang mở trình quay...")
+                    DispatchQueue.main.async {
+                        // Lấy cửa sổ giao diện hiện tại của App
+                        guard let window = UIApplication.shared.windows.first(where: { $0.isKeyWindow }) else {
+                            result("Lỗi: Không tìm thấy giao diện")
+                            return
+                        }
+                        
+                        // 1. Tạo Picker với kích thước thật (thay vì .zero)
+                        let pickerView = RPSystemBroadcastPickerView(frame: CGRect(x: 0, y: 0, width: 50, height: 50))
+                        pickerView.showsMicrophoneButton = false
+                        pickerView.preferredExtension = "com.quickcapture.vn.QuickCaptureExt" // Bundle ID của bạn
+                        
+                        // 2. Ép nó phải ẩn đi (để user không thấy) nhưng VẪN NẰM TRONG VIEW HIERARCHY
+                        pickerView.alpha = 0.01
+                        window.addSubview(pickerView)
+                        
+                        // 3. Thực hiện click giả
+                        for view in pickerView.subviews {
+                            if let button = view as? UIButton {
+                                button.sendActions(for: .touchUpInside) // Dùng touchUpInside thay vì allEvents
+                                break
+                            }
+                        }
+                        
+                        // 4. Dọn dẹp: Xóa nút mồi này đi sau 1 giây để không rác bộ nhớ
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                            pickerView.removeFromSuperview()
+                        }
+                    }
+                    result("Đang mở trình quay...")
                 } else {
                     result("iOS không hỗ trợ")
                 }
@@ -94,7 +94,14 @@ import ReplayKit
                 } else {
                     result(false)
                 }
-            
+            case "isRecording":
+                if let userDefaults = UserDefaults(suiteName: "group.com.quickcapture.com") {
+                    let isRecording = userDefaults.bool(forKey: "isRecordingActive")
+                    result(isRecording)
+                } else {
+                    result(false)
+                }
+                
                 
             default:
                 result(FlutterMethodNotImplemented)
@@ -103,7 +110,7 @@ import ReplayKit
         
         return super.application(application, didFinishLaunchingWithOptions: launchOptions)
     }
-
+    
     private func getVideoList(result: @escaping FlutterResult) {
         guard let sharedContainer = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: "group.com.quickcapture.com") else {
             result([])
@@ -126,7 +133,7 @@ import ReplayKit
             result([])
         }
     }
-
+    
     private func saveSpecificVideo(path: String, result: @escaping FlutterResult) {
         let videoURL = URL(fileURLWithPath: path)
         
@@ -134,7 +141,7 @@ import ReplayKit
             result("Không tìm thấy file video này.")
             return
         }
-
+        
         PHPhotoLibrary.requestAuthorization { status in
             if status == .authorized {
                 PHPhotoLibrary.shared().performChanges({

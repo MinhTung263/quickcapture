@@ -52,8 +52,8 @@ class _ScreenRecordAppState extends State<ScreenRecordApp>
 
   Future<void> startRecord() async {
     try {
-      final result = await channel.invokeMethod("startRecord");
-      setState(() => status = result);
+      await channel.invokeMethod("startRecord");
+      setState(() => status = "Hãy chọn 'Bắt đầu truyền phát'...");
     } catch (e) {
       _showSnackBar("Lỗi: $e", isError: true);
     }
@@ -62,14 +62,27 @@ class _ScreenRecordAppState extends State<ScreenRecordApp>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) async {
     if (state == AppLifecycleState.resumed) {
-      // 1. Kiểm tra xem Extension có báo là vừa quay xong video mới không
-      final bool hasNewVideo = await channel.invokeMethod(
-        "checkNewVideoStatus",
-      );
+      // Khi đóng màn hình Picker hệ thống hoặc quay lại app, App sẽ rơi vào trạng thái resumed.
 
-      // 2. Chỉ thực hiện load lại nếu thực sự có video mới
-      if (hasNewVideo) {
+      // Kiểm tra xem có video mới không
+      final bool hasNew = await channel.invokeMethod("checkNewVideoStatus");
+
+      if (hasNew) {
         loadVideoList();
+      } else {
+        // Nếu KHÔNG có video mới, ta kiểm tra xem Extension CÓ ĐANG QUAY không?
+        final bool isRecording = await channel.invokeMethod("isRecording");
+
+        setState(() {
+          if (isRecording) {
+            status = "🔴 Đang ghi hình...";
+          } else {
+            // Nếu không quay và không có video mới -> Người dùng đã bấm Hủy hoặc đóng Picker
+            if (status == "Hãy chọn 'Bắt đầu truyền phát'...") {
+              status = "Sẵn sàng"; // Trả lại trạng thái ban đầu
+            }
+          }
+        });
       }
     }
   }

@@ -8,7 +8,7 @@ class SampleHandler: RPBroadcastSampleHandler {
     private var tempVideoURL: URL?
     private var currentFileName: String = ""
     private var sessionStarted = false
-
+    
     override func broadcastStarted(withSetupInfo setupInfo: [String : NSObject]?) {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyyMMdd_HHmmss"
@@ -20,7 +20,7 @@ class SampleHandler: RPBroadcastSampleHandler {
             userDefaults.set(true, forKey: "isRecordingActive") // Đánh dấu đang quay
             userDefaults.synchronize()
         }
-
+        
         let tempDir = FileManager.default.temporaryDirectory
         let tempURL = tempDir.appendingPathComponent(currentFileName)
         self.tempVideoURL = tempURL
@@ -78,7 +78,7 @@ class SampleHandler: RPBroadcastSampleHandler {
         default: break
         }
     }
-
+    
     override func broadcastFinished() {
         isRecording = false
         videoInput?.markAsFinished()
