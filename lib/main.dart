@@ -4,6 +4,8 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'video_player_screen.dart';
+
 void main() {
   SystemChrome.setSystemUIOverlayStyle(
     const SystemUiOverlayStyle(
@@ -213,7 +215,7 @@ class _ScreenRecordAppState extends State<ScreenRecordApp>
       if (bytes <= 0) return "0 B";
       const suffixes = ["B", "KB", "MB", "GB", "TB"];
       var i = (log(bytes) / log(1024)).floor();
-      return ((bytes / pow(1024, i)).toStringAsFixed(1)) + ' ' + suffixes[i];
+      return '${(bytes / pow(1024, i)).toStringAsFixed(1)} ${suffixes[i]}';
     } catch (e) {
       return "Lỗi đọc file";
     }
@@ -550,6 +552,17 @@ class _ScreenRecordAppState extends State<ScreenRecordApp>
               horizontal: 16,
               vertical: 10,
             ),
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => VideoPlayerScreen(
+                    videoPath: path,
+                    videoName: fileName.replaceAll(".mp4", ""),
+                  ),
+                ),
+              );
+            },
             leading: Container(
               height: 55,
               width: 55,
