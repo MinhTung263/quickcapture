@@ -1,248 +1,312 @@
-package com.quickcapture
+package com.quickcapture.vn
 
-import android.app.Activity
-import android.app.NotificationChannel
-import android.app.NotificationManager
-import android.app.Service
+import android.annotation.SuppressLint
+import android.app.*
+import android.content.Context
 import android.content.Intent
-import android.content.pm.ServiceInfo
+import android.graphics.Color
+import android.graphics.PixelFormat
+import android.graphics.drawable.GradientDrawable
 import android.hardware.display.DisplayManager
+import android.hardware.display.VirtualDisplay
 import android.media.MediaRecorder
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.Environment
+import android.os.Handler
 import android.os.IBinder
-import android.util.Log
+import android.os.Looper
+import android.util.DisplayMetrics
+import android.view.Gravity
+import android.view.MotionEvent
+import android.view.View
+import android.view.WindowManager
+import android.widget.LinearLayout
+import android.widget.TextView
 import androidx.core.app.NotificationCompat
 import java.io.File
-import android.content.ContentValues
-import android.provider.MediaStore
-import java.io.FileInputStream
-import java.io.FileOutputStream
+import java.text.SimpleDateFormat
+import java.util.*
 
 class RecordingService : Service() {
-
-    private var mediaProjectionManager: MediaProjectionManager? = null
     private var mediaProjection: MediaProjection? = null
+    private var virtualDisplay: VirtualDisplay? = null
     private var mediaRecorder: MediaRecorder? = null
-    private var isRecording = false
-    companion object {
-        var videoPath: String = ""
-    }
+    private val CHANNEL_ID = "ScreenRecordChannel"
+    private var isStopping = false
+    // Các biến cho Widget Floating
+    private var windowManager: WindowManager? = null
+    private var floatingView: View? = null
+    private var tvTime: TextView? = null
+    private var secondsElapsed = 0
+    private var timerHandler = Handler(Looper.getMainLooper())
+    private var timerRunnable: Runnable? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == "STOP_RECORDING") {
             stopRecording()
-            stopSelf()
             return START_NOT_STICKY
         }
 
-        // 1. Khởi tạo Notification Channel & Foreground Service
-        val channelId = "screen_record_channel"
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                channelId, "Screen Recording", NotificationManager.IMPORTANCE_LOW
-            )
-            getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
-        }
+        createNotificationChannel()
 
-        val notification = NotificationCompat.Builder(this, channelId)
-            .setContentTitle("Screen Recorder")
-            .setContentText("Đang quay màn hình...")
-            .setSmallIcon(android.R.drawable.ic_dialog_info)
+        val stopIntent = Intent(this, RecordingService::class.java).apply { action = "STOP_RECORDING" }
+        val pendingStopIntent = PendingIntent.getService(this, 0, stopIntent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+
+        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle("Quick Capture")
+            .setContentText("Đang ghi hình màn hình...")
+            .setSmallIcon(android.R.drawable.ic_menu_camera)
+            .addAction(android.R.drawable.ic_media_pause, "Dừng quay", pendingStopIntent)
+            .setOngoing(true)
             .build()
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(1, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
-        } else {
-            startForeground(1, notification)
-        }
+        startForeground(1, notification)
 
-        // 2. Nhận Intent an toàn cho Android 13/14
-        val resultCode = intent?.getIntExtra("resultCode", Activity.RESULT_CANCELED) ?: Activity.RESULT_CANCELED
-        val data: Intent? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            intent?.getParcelableExtra("data", Intent::class.java)
-        } else {
-            @Suppress("DEPRECATION")
-            intent?.getParcelableExtra("data")
-        }
+        val resultCode = intent?.getIntExtra("code", -1) ?: -1
+        val data = intent?.getParcelableExtra<Intent>("data")
 
         if (resultCode == Activity.RESULT_OK && data != null) {
             startRecording(resultCode, data)
+        } else {
+            stopSelf()
         }
 
         return START_NOT_STICKY
     }
 
     private fun startRecording(resultCode: Int, data: Intent) {
+        val metrics = DisplayMetrics()
+        val winManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+        winManager.defaultDisplay.getRealMetrics(metrics)
+
+        var screenWidth = metrics.widthPixels
+        var screenHeight = metrics.heightPixels
+        val screenDensity = metrics.densityDpi
+
+        val maxRes = 1080
+        if (screenWidth > maxRes) {
+            val scale = maxRes.toFloat() / screenWidth
+            screenWidth = maxRes
+            screenHeight = (screenHeight * scale).toInt()
+        }
+
+        screenWidth = (screenWidth / 16) * 16
+        screenHeight = (screenHeight / 16) * 16
+
+        val formatter = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault())
+        val fileName = "REC_${formatter.format(Date())}.mp4"
+
+        val directory = getExternalFilesDir(Environment.DIRECTORY_MOVIES)
+        if (directory != null && !directory.exists()) directory.mkdirs()
+        val filePath = File(directory, fileName).absolutePath
+
         try {
-            mediaProjectionManager = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+            mediaRecorder = MediaRecorder().apply {
+                setVideoSource(MediaRecorder.VideoSource.SURFACE)
+                setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+                setVideoEncoder(MediaRecorder.VideoEncoder.H264)
+                setVideoSize(screenWidth, screenHeight)
+                setVideoEncodingBitRate(6000000)
+                setVideoFrameRate(30)
+                setOutputFile(filePath)
+                prepare()
+            }
 
-            // Lấy kích thước thật của màn hình
-            val metrics = resources.displayMetrics
-            var width = metrics.widthPixels
-            var height = metrics.heightPixels
+            val projectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+            mediaProjection = projectionManager.getMediaProjection(resultCode, data)
 
-            // Bắt buộc phải là bội số của 16
-            width -= width % 16
-            height -= height % 16
-
-            setupMediaRecorder(width, height)
-
-            mediaProjection = mediaProjectionManager?.getMediaProjection(resultCode, data)
-
-            // ==========================================
-            // THÊM ĐOẠN CALLBACK NÀY CHO ANDROID 14+
-            // ==========================================
             mediaProjection?.registerCallback(object : MediaProjection.Callback() {
                 override fun onStop() {
                     super.onStop()
-                    Log.d("RecordingService", "Hệ thống hoặc người dùng đã ngắt MediaProjection")
-                    // Dọn dẹp tài nguyên nếu bị ngắt đột ngột
                     stopRecording()
-                    stopSelf()
                 }
             }, null)
-            // ==========================================
 
-            val surface = mediaRecorder?.surface
-            if (surface != null) {
-                mediaProjection?.createVirtualDisplay(
-                    "ScreenRec",
-                    width, height, metrics.densityDpi,
-                    android.hardware.display.DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-                    surface, null, null
-                )
-                mediaRecorder?.start()
+            virtualDisplay = mediaProjection?.createVirtualDisplay(
+                "ScreenRecord",
+                screenWidth, screenHeight, screenDensity,
+                DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+                mediaRecorder?.surface, null, null
+            )
 
-                // Đánh dấu là ĐANG QUAY
-                isRecording = true
+            mediaRecorder?.start()
 
-                Log.d("RecordingService", "Bắt đầu quay thành công!")
-            }
+            // 🚀 HIỂN THỊ WIDGET SAU KHI BẮT ĐẦU QUAY THÀNH CÔNG
+            showFloatingWidget()
+
         } catch (e: Exception) {
-            Log.e("RecordingService", "Lỗi khởi tạo quay màn hình: ${e.message}")
             e.printStackTrace()
             stopSelf()
         }
     }
 
-    private fun setupMediaRecorder(width: Int, height: Int) {
-        val dir = getExternalFilesDir(Environment.DIRECTORY_MOVIES)
-        val file = File(dir, "record_${System.currentTimeMillis()}.mp4")
-        videoPath = file.absolutePath
+    @SuppressLint("ClickableViewAccessibility")
+    private fun showFloatingWidget() {
+        windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
 
-        mediaRecorder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            MediaRecorder(this)
+        // Khai báo layout params cho cửa sổ trôi nổi
+        val layoutFlag = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
         } else {
             @Suppress("DEPRECATION")
-            MediaRecorder()
+            WindowManager.LayoutParams.TYPE_PHONE
         }
 
-        mediaRecorder?.apply {
-            setAudioSource(MediaRecorder.AudioSource.MIC)
-            setVideoSource(MediaRecorder.VideoSource.SURFACE)
-            setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
-            setOutputFile(videoPath)
-            setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+        val params = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            layoutFlag,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+            PixelFormat.TRANSLUCENT
+        )
 
-            setVideoEncoder(MediaRecorder.VideoEncoder.H264)
+        // Vị trí mặc định ở góc trên bên trái
+        params.gravity = Gravity.TOP or Gravity.START
+        params.x = 50
+        params.y = 150
 
-            // 3. Hạ Bitrate xuống 5 Mbps (mức an toàn cho mọi dòng máy)
-            setVideoEncodingBitRate(5000000)
-            setVideoFrameRate(30)
-            setVideoSize(width, height)
-
-            try {
-                prepare()
-            } catch (e: Exception) {
-                Log.e("RecordingService", "Lỗi Prepare MediaRecorder: ${e.message}")
+        // 1. Tạo Layout chứa
+        val layout = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(30, 20, 30, 20)
+            gravity = Gravity.CENTER_VERTICAL
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#E6000000")) // Màu đen hơi trong suốt
+                cornerRadius = 50f
             }
         }
+
+        // 2. Chấm đỏ nhấp nháy (Giả lập đèn record)
+        val redDot = View(this).apply {
+            layoutParams = LinearLayout.LayoutParams(24, 24).apply { setMargins(0, 0, 20, 0) }
+            background = GradientDrawable().apply {
+                setColor(Color.RED)
+                shape = GradientDrawable.OVAL
+            }
+        }
+
+        // 3. Chữ đếm thời gian
+        tvTime = TextView(this).apply {
+            text = "00:00"
+            setTextColor(Color.WHITE)
+            textSize = 15f
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { setMargins(0, 0, 30, 0) }
+        }
+
+        // 4. Nút Stop (Hình vuông cam/đỏ)
+        val stopBtn = TextView(this).apply {
+            text = "⏹" // Biểu tượng Stop
+            setTextColor(Color.parseColor("#FF5252"))
+            textSize = 22f
+            setPadding(10, 0, 0, 0)
+            setOnClickListener {
+                stopRecording() // Dừng quay ngay lập tức khi bấm
+            }
+        }
+
+        layout.addView(redDot)
+        layout.addView(tvTime)
+        layout.addView(stopBtn)
+
+        floatingView = layout
+        windowManager?.addView(floatingView, params)
+
+        // Xử lý kéo thả Widget
+        var initialX = 0
+        var initialY = 0
+        var initialTouchX = 0f
+        var initialTouchY = 0f
+
+        layout.setOnTouchListener { _, event ->
+            when (event.action) {
+                MotionEvent.ACTION_DOWN -> {
+                    initialX = params.x
+                    initialY = params.y
+                    initialTouchX = event.rawX
+                    initialTouchY = event.rawY
+                    return@setOnTouchListener false // Trả về false để Button Stop vẫn nhận được click
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    params.x = initialX + (event.rawX - initialTouchX).toInt()
+                    params.y = initialY + (event.rawY - initialTouchY).toInt()
+                    windowManager?.updateViewLayout(floatingView, params)
+                    return@setOnTouchListener true
+                }
+                else -> return@setOnTouchListener false
+            }
+        }
+
+        // Khởi động đồng hồ đếm giờ
+        startTimer()
+    }
+
+    private fun startTimer() {
+        secondsElapsed = 0
+        timerRunnable = object : Runnable {
+            override fun run() {
+                secondsElapsed++
+                val mins = secondsElapsed / 60
+                val secs = secondsElapsed % 60
+                tvTime?.text = String.format("%02d:%02d", mins, secs)
+                timerHandler.postDelayed(this, 1000) // Lặp lại sau 1 giây
+            }
+        }
+        timerHandler.post(timerRunnable!!)
+    }
+
+    private fun removeFloatingWidget() {
+        timerRunnable?.let { timerHandler.removeCallbacks(it) }
+        floatingView?.let { windowManager?.removeView(it) }
+        floatingView = null
     }
 
     private fun stopRecording() {
-        // Nếu đã dừng rồi thì không làm gì nữa, tránh bị Double Stop
-        if (!isRecording) return
-        isRecording = false
+        // Chốt chặn: Nếu đang trong quá trình dừng rồi thì không chạy lại nữa
+        if (isStopping) return
+        isStopping = true
+
+        removeFloatingWidget()
 
         try {
             mediaRecorder?.stop()
-        } catch (e: Exception) {
-            Log.e("RecordingService", "Lỗi khi stop MediaRecorder (thường do quay quá ngắn): ${e.message}")
-        } finally {
-            // Đảm bảo luôn giải phóng tài nguyên dù bị lỗi
-            try {
-                mediaRecorder?.reset()
-                mediaRecorder?.release()
-                mediaRecorder = null
-
-                // Gọi hàm lưu vào thư viện (nếu bạn đang dùng hàm saveVideoToGallery đã làm ở bước trước)
-                if (videoPath.isNotEmpty()) {
-                    saveVideoToGallery(videoPath)
-                }
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
-        }
-
-        try {
-            mediaProjection?.stop()
+            mediaRecorder?.reset()
         } catch (e: Exception) {
             e.printStackTrace()
-        } finally {
-            mediaProjection = null
         }
+
+        virtualDisplay?.release()
+        mediaProjection?.stop() // Lúc này nó có gọi lại onStop() thì cũng bị chốt chặn bật ra
+
+        val prefs = getSharedPreferences("QuickCapturePrefs", Context.MODE_PRIVATE)
+        prefs.edit().apply {
+            putBoolean("hasNewVideo", true)
+            putBoolean("isRecordingActive", false)
+            apply()
+        }
+
+        // 🚀 Bổ sung setPackage để tín hiệu bay thẳng đích đến MainActivity mà không bị Android chặn
+        val broadcastIntent = Intent("com.quickcapture.vn.VIDEO_SAVED")
+        broadcastIntent.setPackage(packageName)
+        sendBroadcast(broadcastIntent)
+
+        stopForeground(true)
+        stopSelf()
     }
-    private fun saveVideoToGallery(filePath: String) {
-        val file = File(filePath)
-        if (!file.exists()) return
 
-        try {
-            val values = ContentValues().apply {
-                put(MediaStore.Video.Media.DISPLAY_NAME, file.name)
-                put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
-                // Lưu vào thư mục Movies/ScreenRecords của điện thoại
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    put(MediaStore.Video.Media.RELATIVE_PATH, Environment.DIRECTORY_MOVIES + "/ScreenRecords")
-                    put(MediaStore.Video.Media.IS_PENDING, 1)
-                }
-            }
-
-            val resolver = contentResolver
-            val collection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
-            } else {
-                MediaStore.Video.Media.EXTERNAL_CONTENT_URI
-            }
-
-            val itemUri = resolver.insert(collection, values)
-
-            if (itemUri != null) {
-                resolver.openOutputStream(itemUri).use { out ->
-                    FileInputStream(file).use { input ->
-                        input.copyTo(out!!)
-                    }
-                }
-
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    values.clear()
-                    values.put(MediaStore.Video.Media.IS_PENDING, 0)
-                    resolver.update(itemUri, values, null, null)
-                }
-
-                // Xoá file gốc trong thư mục ẩn của app để giải phóng bộ nhớ
-                file.delete()
-
-                // Cập nhật lại đường dẫn để báo về Flutter
-                videoPath = "Đã lưu vào Ảnh/Video (Movies/ScreenRecords/${file.name})"
-            }
-        } catch (e: Exception) {
-            e.printStackTrace()
-            Log.e("RecordingService", "Lỗi khi lưu vào Gallery: ${e.message}")
+    private fun createNotificationChannel() {
+        // ... (Giữ nguyên cấu hình NotificationChannel như cũ)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                CHANNEL_ID,
+                "Trạng thái quay màn hình",
+                NotificationManager.IMPORTANCE_LOW
+            )
+            val manager = getSystemService(NotificationManager::class.java)
+            manager?.createNotificationChannel(channel)
         }
     }
 }

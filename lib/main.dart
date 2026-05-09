@@ -40,12 +40,36 @@ class _ScreenRecordAppState extends State<ScreenRecordApp>
     super.initState();
     // Đăng ký quan sát vòng đời ứng dụng
     WidgetsBinding.instance.addObserver(this);
+
+    _setupNativeListener();
     loadVideoList();
+  }
+
+  void _setupNativeListener() {
+    channel.setMethodCallHandler((call) async {
+      switch (call.method) {
+        case "onVideoSaved":
+          if (mounted) {
+            setState(() => status = "Đã lưu video! Đang làm mới...");
+            // Thêm 'await' để đảm bảo quá trình load chạy đồng bộ, tránh đụng độ UI
+            await loadVideoList();
+          }
+          break;
+        // Rất dễ dàng thêm các tín hiệu khác từ Android/iOS ở đây sau này
+        // case "onError": ...
+
+        default:
+          debugPrint("Chưa xử lý tín hiệu từ Native: ${call.method}");
+          break;
+      }
+      return null; // Chuẩn hóa bắt buộc của MethodCallHandler
+    });
   }
 
   @override
   void dispose() {
     // Hủy đăng ký khi widget bị hủy
+    channel.setMethodCallHandler(null);
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -62,27 +86,28 @@ class _ScreenRecordAppState extends State<ScreenRecordApp>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) async {
     if (state == AppLifecycleState.resumed) {
-      // Khi đóng màn hình Picker hệ thống hoặc quay lại app, App sẽ rơi vào trạng thái resumed.
-
-      // Kiểm tra xem có video mới không
+      // 1. Kiểm tra xem Native có cắm cờ "Có video mới" không (Dùng cho iOS hoặc khi thoát app hẳn)
       final bool hasNew = await channel.invokeMethod("checkNewVideoStatus");
 
       if (hasNew) {
+        // NẾU THỰC SỰ CÓ VIDEO MỚI -> MỚI ĐƯỢC XOAY LOADING
         loadVideoList();
       } else {
-        // Nếu KHÔNG có video mới, ta kiểm tra xem Extension CÓ ĐANG QUAY không?
+        // 2. NẾU KHÔNG CÓ VIDEO MỚI -> Chỉ cập nhật lại chữ hiển thị trạng thái
         final bool isRecording = await channel.invokeMethod("isRecording");
 
-        setState(() {
-          if (isRecording) {
-            status = "🔴 Đang ghi hình...";
-          } else {
-            // Nếu không quay và không có video mới -> Người dùng đã bấm Hủy hoặc đóng Picker
-            if (status == "Hãy chọn 'Bắt đầu truyền phát'...") {
-              status = "Sẵn sàng"; // Trả lại trạng thái ban đầu
+        if (mounted) {
+          setState(() {
+            if (isRecording) {
+              status = "🔴 Đang ghi hình...";
+            } else {
+              if (status == "Hãy chọn 'Bắt đầu truyền phát'..." ||
+                  status == "Vui lòng cấp quyền...") {
+                status = "Sẵn sàng";
+              }
             }
-          }
-        });
+          });
+        }
       }
     }
   }
