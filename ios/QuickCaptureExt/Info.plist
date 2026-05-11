@@ -11,6 +11,8 @@
 		<key>RPBroadcastProcessMode</key>
 		<string>RPBroadcastProcessModeSampleBuffer</string>
 	</dict>
+	<key>CFBundleIconName</key>
+	<string>AppIcon</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Ứng dụng cần quyền lưu video quay màn hình vào Thư viện ảnh của bạn.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
