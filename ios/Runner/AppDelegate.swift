@@ -25,6 +25,15 @@ import ReplayKit
         channel?.setMethodCallHandler({ (call: FlutterMethodCall, result: @escaping FlutterResult) in
             switch call.method {
             case "startRecord":
+                // 1. Nhận tham số quality từ Flutter (nếu không có thì mặc định 720p)
+                let args = call.arguments as? [String: Any]
+                let quality = args?["quality"] as? String ?? "720p"
+                
+                // 2. Lưu chất lượng vào App Group để Extension có thể đọc được
+                if let userDefaults = UserDefaults(suiteName: "group.com.quickcapture.com") {
+                    userDefaults.set(quality, forKey: "selectedVideoQuality")
+                    userDefaults.synchronize()
+                }
                 if #available(iOS 12.0, *) {
                     DispatchQueue.main.async {
                         // Lấy cửa sổ giao diện hiện tại của App

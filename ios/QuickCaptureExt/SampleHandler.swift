@@ -9,6 +9,7 @@ class SampleHandler: RPBroadcastSampleHandler {
     private var currentFileName: String = ""
     private var sessionStarted = false
     private var stopCheckTimer: Timer?
+    
     override func broadcastStarted(withSetupInfo setupInfo: [String : NSObject]?) {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyyMMdd_HHmmss"
@@ -29,18 +30,76 @@ class SampleHandler: RPBroadcastSampleHandler {
             try? FileManager.default.removeItem(at: tempURL)
         }
         
+        // KHÔNG khởi tạo AVAssetWriter ở đây nữa để tránh lỗi sai kích thước màn hình
+        self.isRecording = true
+        self.sessionStarted = false
+        
+        DispatchQueue.main.async {
+            self.stopCheckTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+                self?.checkForStopCommand()
+            }
+        }
+    }
+    
+    // 🚀 HÀM KHỞI TẠO WRITER - GIỮ NGUYÊN CHẤT LƯỢNG GỐC 100%
+    private func setupWriter(with sampleBuffer: CMSampleBuffer) {
+        guard let tempURL = self.tempVideoURL else { return }
+        guard let imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+        
+        // 1. Lấy độ phân giải GỐC THỰC TẾ của thiết bị từ ReplayKit
+        let nativeWidth = CGFloat(CVPixelBufferGetWidth(imageBuffer))
+        let nativeHeight = CGFloat(CVPixelBufferGetHeight(imageBuffer))
+        
+        // 2. Đọc cấu hình từ Flutter
+        var selectedQuality = "720p"
+        if let userDefaults = UserDefaults(suiteName: "group.com.quickcapture.com") {
+            selectedQuality = userDefaults.string(forKey: "selectedVideoQuality") ?? "720p"
+        }
+        
+        var finalWidth = Int(nativeWidth)
+        var finalHeight = Int(nativeHeight)
+        var bitRate = 5000000
+        
+        let maxDimension = max(nativeWidth, nativeHeight)
+        var scaleFactor: CGFloat = 1.0
+        
+        // 3. Xử lý Logic Scale & Bitrate
+        switch selectedQuality {
+        case "1080p":
+            // 🔥 CHÌA KHÓA GIỮ NGUYÊN CHẤT LƯỢNG GỐC
+            // Tuyệt đối không chia 16, chỉ đảm bảo là số chẵn (/ 2 * 2) để tránh lỗi dải màu
+            finalWidth = (Int(nativeWidth) / 2) * 2
+            finalHeight = (Int(nativeHeight) / 2) * 2
+            
+            // Cấp Bitrate hạng nặng: Nhân 7.0 để Video hoàn toàn không vỡ hạt kể cả khi chuyển cảnh nhanh
+            let totalPixels = nativeWidth * nativeHeight
+            bitRate = Int(totalPixels * 7.0)
+            
+        case "480p":
+            if maxDimension > 854 { scaleFactor = 854 / maxDimension }
+            finalWidth = (Int(nativeWidth * scaleFactor) / 16) * 16
+            finalHeight = (Int(nativeHeight * scaleFactor) / 16) * 16
+            bitRate = 2500000 // 2.5 Mbps
+            
+        default: // "720p"
+            if maxDimension > 1280 { scaleFactor = 1280 / maxDimension }
+            finalWidth = (Int(nativeWidth * scaleFactor) / 16) * 16
+            finalHeight = (Int(nativeHeight * scaleFactor) / 16) * 16
+            bitRate = 5000000 // 5 Mbps
+        }
+        
         do {
             let writer = try AVAssetWriter(outputURL: tempURL, fileType: .mp4)
             
-            // Lấy kích thước màn hình
-            let screenBounds = UIScreen.main.bounds
             let videoSettings: [String: Any] = [
                 AVVideoCodecKey: AVVideoCodecType.h264,
-                AVVideoWidthKey: screenBounds.width * UIScreen.main.scale,
-                AVVideoHeightKey: screenBounds.height * UIScreen.main.scale,
+                AVVideoWidthKey: finalWidth,
+                AVVideoHeightKey: finalHeight,
                 AVVideoCompressionPropertiesKey: [
-                    AVVideoAverageBitRateKey: 6000000,
-                    AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel
+                    AVVideoAverageBitRateKey: bitRate,
+                    AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel, // Cấu hình cao nhất
+                    AVVideoExpectedSourceFrameRateKey: 60, // Khóa ở 60 FPS
+                    AVVideoMaxKeyFrameIntervalKey: 60 // Giúp file video tua mượt hơn, nét hơn
                 ]
             ]
             
@@ -51,39 +110,38 @@ class SampleHandler: RPBroadcastSampleHandler {
                 writer.add(input)
                 self.assetWriter = writer
                 self.videoInput = input
-                self.isRecording = true
-                self.sessionStarted = false
             }
         } catch {
-            finishBroadcastWithError(error)
-        }
-        DispatchQueue.main.async {
-            self.stopCheckTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
-                self?.checkForStopCommand()
-            }
+            print("Lỗi khởi tạo Writer: \(error)")
         }
     }
+    
     @objc private func checkForStopCommand() {
         if let userDefaults = UserDefaults(suiteName: "group.com.quickcapture.com"),
            userDefaults.bool(forKey: "forceStopCommand") {
             
-            // Xóa lệnh
             userDefaults.set(false, forKey: "forceStopCommand")
             userDefaults.synchronize()
             
-            // Hủy timer
             stopCheckTimer?.invalidate()
             stopCheckTimer = nil
             
-            // Gọi hàm ép dừng đã viết lần trước
             forceStopAndSave()
         }
     }
+    
     override func processSampleBuffer(_ sampleBuffer: CMSampleBuffer, with sampleBufferType: RPSampleBufferType) {
-        guard isRecording, let writer = assetWriter, let input = videoInput else { return }
+        guard isRecording else { return }
         
         switch sampleBufferType {
         case .video:
+            // 🚀 BẮT ĐÚNG KHUNG HÌNH ĐẦU TIÊN ĐỂ KHỞI TẠO WRITER
+            if assetWriter == nil {
+                setupWriter(with: sampleBuffer)
+            }
+            
+            guard let writer = assetWriter, let input = videoInput else { return }
+            
             if writer.status == .unknown {
                 if writer.startWriting() {
                     let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
@@ -98,7 +156,7 @@ class SampleHandler: RPBroadcastSampleHandler {
         default: break
         }
     }
-    // 3. THÊM HÀM MỚI NÀY VÀO TRONG CLASS SampleHandler
+    
     private func forceStopAndSave() {
         isRecording = false
         videoInput?.markAsFinished()
@@ -119,7 +177,6 @@ class SampleHandler: RPBroadcastSampleHandler {
                         }
                         try FileManager.default.moveItem(at: tempURL, to: finalURL)
                         
-                        // Bật cờ báo có video mới
                         if let userDefaults = UserDefaults(suiteName: "group.com.quickcapture.com") {
                             userDefaults.set(true, forKey: "hasNewVideo")
                             userDefaults.set(false, forKey: "isRecordingActive")
@@ -134,10 +191,10 @@ class SampleHandler: RPBroadcastSampleHandler {
             _ = semaphore.wait(timeout: .now() + 5.0)
         }
         
-        // ĐÂY LÀ ĐÒN QUYẾT ĐỊNH: Quăng một lỗi giả để hệ thống iOS tự dập tắt cái Extension này đi
         let error = NSError(domain: "QuickCapture", code: 0, userInfo: [NSLocalizedFailureReasonErrorKey: "Đã lưu video thành công qua App."])
         self.finishBroadcastWithError(error)
     }
+    
     override func broadcastFinished() {
         isRecording = false
         videoInput?.markAsFinished()
@@ -146,11 +203,9 @@ class SampleHandler: RPBroadcastSampleHandler {
         guard let writer = assetWriter else { return }
         
         if writer.status == .writing {
-            // SỬ DỤNG SEMAPHORE ĐỂ CHẶN TIẾN TRÌNH LẠI
             let semaphore = DispatchSemaphore(value: 0)
             
             writer.finishWriting { [weak self] in
-                // defer đảm bảo semaphore luôn được gọi giải phóng dù code thành công hay lỗi
                 defer { semaphore.signal() }
                 
                 guard let self = self, let tempURL = self.tempVideoURL else { return }
@@ -169,18 +224,14 @@ class SampleHandler: RPBroadcastSampleHandler {
                             userDefaults.set(false, forKey: "isRecordingActive")
                             userDefaults.synchronize()
                         }
-                        print("✅ Lưu thành công: \(finalURL.path)")
                     } catch {
                         print("❌ Lỗi lưu file: \(error)")
                     }
                 }
             }
             
-            // Ép hệ thống chờ tiến trình finishWriting hoàn tất.
-            // Giới hạn timeout 5 giây để tránh bị Apple crash do freeze quá lâu.
             _ = semaphore.wait(timeout: .now() + 5.0)
         } else {
-            // Nếu có lỗi, reset trạng thái
             if let userDefaults = UserDefaults(suiteName: "group.com.quickcapture.com") {
                 userDefaults.set(false, forKey: "isRecordingActive")
                 userDefaults.synchronize()

@@ -51,6 +51,7 @@ class _ScreenRecordAppState extends State<ScreenRecordApp>
   bool isRecording = false;
   List<String> selectedPaths = []; // Lưu danh sách các file đang được chọn
   bool isSelectionMode = false;
+  String selectedQuality = "720p";
   @override
   void initState() {
     super.initState();
@@ -104,7 +105,9 @@ class _ScreenRecordAppState extends State<ScreenRecordApp>
 
   Future<void> startRecord() async {
     try {
-      final result = await channel.invokeMethod("startRecord");
+      final result = await channel.invokeMethod("startRecord", {
+        "quality": selectedQuality,
+      });
       if (mounted) setState(() => status = result);
     } catch (e) {
       _showSnackBar("Lỗi: $e", isError: true);
@@ -532,7 +535,9 @@ class _ScreenRecordAppState extends State<ScreenRecordApp>
         children: [
           _buildStatusBadge(),
           const SizedBox(height: 35),
-
+          // 3. Thêm Widget chọn chất lượng video
+          _buildQualitySelector(),
+          const SizedBox(height: 20),
           GestureDetector(
             onTap: isRecording ? stopRecord : startRecord,
             child: TweenAnimationBuilder<double>(
@@ -621,6 +626,41 @@ class _ScreenRecordAppState extends State<ScreenRecordApp>
           ),
         ],
       ),
+    );
+  }
+
+  Widget _buildQualitySelector() {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: ["480p", "720p", "1080p"].map((q) {
+        final isSelected = selectedQuality == q;
+        return GestureDetector(
+          // Khóa không cho đổi chất lượng khi đang quay
+          onTap: isRecording ? null : () => setState(() => selectedQuality = q),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 200),
+            margin: const EdgeInsets.symmetric(horizontal: 6),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            decoration: BoxDecoration(
+              color: isSelected ? const Color(0xFFFF3B30) : Colors.grey[100],
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(
+                color: isSelected
+                    ? const Color(0xFFFF3B30)
+                    : Colors.transparent,
+              ),
+            ),
+            child: Text(
+              q,
+              style: TextStyle(
+                color: isSelected ? Colors.white : Colors.grey[600],
+                fontWeight: isSelected ? FontWeight.w800 : FontWeight.w600,
+                fontSize: 13,
+              ),
+            ),
+          ),
+        );
+      }).toList(),
     );
   }
 
