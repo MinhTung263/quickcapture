@@ -68,9 +68,10 @@ class RecordingService : Service() {
 
         val resultCode = intent?.getIntExtra("code", -1) ?: -1
         val data = intent?.getParcelableExtra<Intent>("data")
-
+        val quality = intent?.getStringExtra("quality") ?: "720p"
+        val isAudioEnabled = intent?.getBooleanExtra("isAudioEnabled", true) ?: true
         if (resultCode == Activity.RESULT_OK && data != null) {
-            startRecording(resultCode, data)
+            startRecording(resultCode, data, quality, isAudioEnabled)
         } else {
             stopSelf()
         }
@@ -78,7 +79,7 @@ class RecordingService : Service() {
         return START_NOT_STICKY
     }
 
-    private fun startRecording(resultCode: Int, data: Intent) {
+    private fun startRecording(resultCode: Int, data: Intent, quality: String, isAudioEnabled: Boolean) {
         val metrics = DisplayMetrics()
         val winManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
         winManager.defaultDisplay.getRealMetrics(metrics)
@@ -87,15 +88,34 @@ class RecordingService : Service() {
         var screenHeight = metrics.heightPixels
         val screenDensity = metrics.densityDpi
 
-        val maxRes = 1080
-        if (screenWidth > maxRes) {
-            val scale = maxRes.toFloat() / screenWidth
-            screenWidth = maxRes
-            screenHeight = (screenHeight * scale).toInt()
+        var bitRate = 5000000
+        var frameRate = 30
+        var scaleFactor = 1f
+
+        val maxDimension = Math.max(screenWidth, screenHeight)
+
+        // 1. TÍNH TOÁN LOGIC CHẤT LƯỢNG (Giống hệt iOS)
+        when (quality) {
+            "1080p" -> {
+                scaleFactor = 1f // Giữ nguyên kích thước gốc
+                bitRate = (screenWidth * screenHeight * 5.0).toInt() // Bitrate siêu cao
+                frameRate = 60
+            }
+            "480p" -> {
+                if (maxDimension > 854) scaleFactor = 854f / maxDimension
+                bitRate = 2500000
+                frameRate = 30
+            }
+            else -> { // "720p"
+                if (maxDimension > 1280) scaleFactor = 1280f / maxDimension
+                bitRate = 5000000
+                frameRate = 30
+            }
         }
 
-        screenWidth = (screenWidth / 16) * 16
-        screenHeight = (screenHeight / 16) * 16
+        // Bắt buộc chia hết cho 16 để tránh lỗi H.264
+        val finalWidth = (screenWidth * scaleFactor).toInt() / 16 * 16
+        val finalHeight = (screenHeight * scaleFactor).toInt() / 16 * 16
 
         val formatter = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault())
         val fileName = "REC_${formatter.format(Date())}.mp4"
@@ -106,12 +126,27 @@ class RecordingService : Service() {
 
         try {
             mediaRecorder = MediaRecorder().apply {
+                // 2. THIẾT LẬP ÂM THANH TRƯỚC
+                if (isAudioEnabled) {
+                    setAudioSource(MediaRecorder.AudioSource.MIC) // Android bắt buộc dùng MIC
+                }
+
+                // 3. THIẾT LẬP VIDEO
                 setVideoSource(MediaRecorder.VideoSource.SURFACE)
                 setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+
+                // 4. CẤU HÌNH ENCODER
+                if (isAudioEnabled) {
+                    setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+                    setAudioEncodingBitRate(128000)
+                    setAudioSamplingRate(44100)
+                }
+
                 setVideoEncoder(MediaRecorder.VideoEncoder.H264)
-                setVideoSize(screenWidth, screenHeight)
-                setVideoEncodingBitRate(6000000)
-                setVideoFrameRate(30)
+                setVideoSize(finalWidth, finalHeight)
+                setVideoEncodingBitRate(bitRate)
+                setVideoFrameRate(frameRate)
+
                 setOutputFile(filePath)
                 prepare()
             }
@@ -128,14 +163,14 @@ class RecordingService : Service() {
 
             virtualDisplay = mediaProjection?.createVirtualDisplay(
                 "ScreenRecord",
-                screenWidth, screenHeight, screenDensity,
+                finalWidth, finalHeight, screenDensity,
                 DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
                 mediaRecorder?.surface, null, null
             )
 
             mediaRecorder?.start()
 
-            // 🚀 HIỂN THỊ WIDGET SAU KHI BẮT ĐẦU QUAY THÀNH CÔNG
+            // Hiển thị Widget nổi sau khi quay thành công
             showFloatingWidget()
 
         } catch (e: Exception) {
