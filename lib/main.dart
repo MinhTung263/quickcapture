@@ -52,6 +52,7 @@ class _ScreenRecordAppState extends State<ScreenRecordApp>
   List<String> selectedPaths = []; // Lưu danh sách các file đang được chọn
   bool isSelectionMode = false;
   String selectedQuality = "720p";
+  bool isAudioEnabled = true;
   @override
   void initState() {
     super.initState();
@@ -107,6 +108,7 @@ class _ScreenRecordAppState extends State<ScreenRecordApp>
     try {
       final result = await channel.invokeMethod("startRecord", {
         "quality": selectedQuality,
+        "isAudioEnabled": isAudioEnabled,
       });
       if (mounted) setState(() => status = result);
     } catch (e) {
@@ -516,6 +518,29 @@ class _ScreenRecordAppState extends State<ScreenRecordApp>
     );
   }
 
+  Widget _buildAudioToggle() {
+    return GestureDetector(
+      onTap: isRecording
+          ? null
+          : () => setState(() => isAudioEnabled = !isAudioEnabled),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: isAudioEnabled
+              ? const Color(0xFFFF3B30).withOpacity(0.1)
+              : Colors.grey[200],
+          shape: BoxShape.circle,
+        ),
+        child: Icon(
+          isAudioEnabled ? Icons.volume_up_rounded : Icons.volume_off_rounded,
+          color: isAudioEnabled ? const Color(0xFFFF3B30) : Colors.grey[500],
+          size: 20,
+        ),
+      ),
+    );
+  }
+
   Widget _buildRecordPanel() {
     return Container(
       width: double.infinity,
@@ -536,7 +561,12 @@ class _ScreenRecordAppState extends State<ScreenRecordApp>
           _buildStatusBadge(),
           const SizedBox(height: 35),
           // 3. Thêm Widget chọn chất lượng video
-          _buildQualitySelector(),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            spacing: 30,
+            children: [_buildQualitySelector(), _buildAudioToggle()],
+          ),
+
           const SizedBox(height: 20),
           GestureDetector(
             onTap: isRecording ? stopRecord : startRecord,

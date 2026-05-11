@@ -4,6 +4,10 @@ import AVFoundation
 class SampleHandler: RPBroadcastSampleHandler {
     private var assetWriter: AVAssetWriter?
     private var videoInput: AVAssetWriterInput?
+    
+    // Luồng ghi âm thanh hệ thống (App Audio)
+    private var audioAppInput: AVAssetWriterInput?
+    
     private var isRecording = false
     private var tempVideoURL: URL?
     private var currentFileName: String = ""
@@ -15,10 +19,9 @@ class SampleHandler: RPBroadcastSampleHandler {
         formatter.dateFormat = "yyyyMMdd_HHmmss"
         currentFileName = "REC_\(formatter.string(from: Date())).mp4"
         
-        // Lưu tên file vào UserDefaults App Group
         if let userDefaults = UserDefaults(suiteName: "group.com.quickcapture.com") {
             userDefaults.set(currentFileName, forKey: "currentRecordingFileName")
-            userDefaults.set(true, forKey: "isRecordingActive") // Đánh dấu đang quay
+            userDefaults.set(true, forKey: "isRecordingActive")
             userDefaults.synchronize()
         }
         
@@ -30,7 +33,6 @@ class SampleHandler: RPBroadcastSampleHandler {
             try? FileManager.default.removeItem(at: tempURL)
         }
         
-        // KHÔNG khởi tạo AVAssetWriter ở đây nữa để tránh lỗi sai kích thước màn hình
         self.isRecording = true
         self.sessionStarted = false
         
@@ -41,19 +43,23 @@ class SampleHandler: RPBroadcastSampleHandler {
         }
     }
     
-    // 🚀 HÀM KHỞI TẠO WRITER - GIỮ NGUYÊN CHẤT LƯỢNG GỐC 100%
     private func setupWriter(with sampleBuffer: CMSampleBuffer) {
         guard let tempURL = self.tempVideoURL else { return }
         guard let imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
         
-        // 1. Lấy độ phân giải GỐC THỰC TẾ của thiết bị từ ReplayKit
         let nativeWidth = CGFloat(CVPixelBufferGetWidth(imageBuffer))
         let nativeHeight = CGFloat(CVPixelBufferGetHeight(imageBuffer))
         
-        // 2. Đọc cấu hình từ Flutter
+        // Đọc cấu hình từ App Group (Flutter gửi xuống)
         var selectedQuality = "720p"
+        var isAudioEnabled = true
+        
         if let userDefaults = UserDefaults(suiteName: "group.com.quickcapture.com") {
             selectedQuality = userDefaults.string(forKey: "selectedVideoQuality") ?? "720p"
+            // Nếu Flutter chưa lưu biến này bao giờ, mặc định là true
+            if userDefaults.object(forKey: "isAudioEnabled") != nil {
+                isAudioEnabled = userDefaults.bool(forKey: "isAudioEnabled")
+            }
         }
         
         var finalWidth = Int(nativeWidth)
@@ -63,24 +69,19 @@ class SampleHandler: RPBroadcastSampleHandler {
         let maxDimension = max(nativeWidth, nativeHeight)
         var scaleFactor: CGFloat = 1.0
         
-        // 3. Xử lý Logic Scale & Bitrate
+        // Xử lý chất lượng Video
         switch selectedQuality {
         case "1080p":
-            // 🔥 CHÌA KHÓA GIỮ NGUYÊN CHẤT LƯỢNG GỐC
-            // Tuyệt đối không chia 16, chỉ đảm bảo là số chẵn (/ 2 * 2) để tránh lỗi dải màu
+            // Giữ nguyên độ phân giải gốc, chỉ làm chẵn để tránh lỗi hệ màu
             finalWidth = (Int(nativeWidth) / 2) * 2
             finalHeight = (Int(nativeHeight) / 2) * 2
-            
-            // Cấp Bitrate hạng nặng: Nhân 7.0 để Video hoàn toàn không vỡ hạt kể cả khi chuyển cảnh nhanh
             let totalPixels = nativeWidth * nativeHeight
-            bitRate = Int(totalPixels * 7.0)
-            
+            bitRate = Int(totalPixels * 7.0) // Bitrate cực lớn để nét căng
         case "480p":
             if maxDimension > 854 { scaleFactor = 854 / maxDimension }
             finalWidth = (Int(nativeWidth * scaleFactor) / 16) * 16
             finalHeight = (Int(nativeHeight * scaleFactor) / 16) * 16
             bitRate = 2500000 // 2.5 Mbps
-            
         default: // "720p"
             if maxDimension > 1280 { scaleFactor = 1280 / maxDimension }
             finalWidth = (Int(nativeWidth * scaleFactor) / 16) * 16
@@ -91,26 +92,45 @@ class SampleHandler: RPBroadcastSampleHandler {
         do {
             let writer = try AVAssetWriter(outputURL: tempURL, fileType: .mp4)
             
+            // --- 1. CẤU HÌNH VIDEO ---
             let videoSettings: [String: Any] = [
                 AVVideoCodecKey: AVVideoCodecType.h264,
                 AVVideoWidthKey: finalWidth,
                 AVVideoHeightKey: finalHeight,
+                AVVideoScalingModeKey: AVVideoScalingModeResizeAspect,
                 AVVideoCompressionPropertiesKey: [
                     AVVideoAverageBitRateKey: bitRate,
-                    AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel, // Cấu hình cao nhất
-                    AVVideoExpectedSourceFrameRateKey: 60, // Khóa ở 60 FPS
-                    AVVideoMaxKeyFrameIntervalKey: 60 // Giúp file video tua mượt hơn, nét hơn
+                    AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel,
+                    AVVideoExpectedSourceFrameRateKey: 60,
+                    AVVideoMaxKeyFrameIntervalKey: 60
                 ]
             ]
-            
             let input = AVAssetWriterInput(mediaType: .video, outputSettings: videoSettings)
             input.expectsMediaDataInRealTime = true
-            
             if writer.canAdd(input) {
                 writer.add(input)
                 self.assetWriter = writer
                 self.videoInput = input
             }
+            
+            // --- 2. CẤU HÌNH ÂM THANH (Dựa vào tuỳ chọn isAudioEnabled) ---
+            if isAudioEnabled {
+                let audioSettings: [String: Any] = [
+                    AVFormatIDKey: kAudioFormatMPEG4AAC,
+                    AVNumberOfChannelsKey: 2,
+                    AVSampleRateKey: 44100,
+                    AVEncoderBitRateKey: 128000 // 128 Kbps
+                ]
+                
+                let appAudioIn = AVAssetWriterInput(mediaType: .audio, outputSettings: audioSettings)
+                appAudioIn.expectsMediaDataInRealTime = true
+                if writer.canAdd(appAudioIn) {
+                    writer.add(appAudioIn)
+                    self.audioAppInput = appAudioIn
+                }
+            }
+            // ----------------------------------------------------------------
+            
         } catch {
             print("Lỗi khởi tạo Writer: \(error)")
         }
@@ -135,7 +155,7 @@ class SampleHandler: RPBroadcastSampleHandler {
         
         switch sampleBufferType {
         case .video:
-            // 🚀 BẮT ĐÚNG KHUNG HÌNH ĐẦU TIÊN ĐỂ KHỞI TẠO WRITER
+            // Bắt khung hình đầu tiên để setup AVAssetWriter
             if assetWriter == nil {
                 setupWriter(with: sampleBuffer)
             }
@@ -153,13 +173,25 @@ class SampleHandler: RPBroadcastSampleHandler {
             if writer.status == .writing && input.isReadyForMoreMediaData && sessionStarted {
                 input.append(sampleBuffer)
             }
-        default: break
+            
+        case .audioApp:
+            // Chỉ ghi nhận khung hình âm thanh nếu audioAppInput đã được khởi tạo
+            guard let writer = assetWriter, let input = audioAppInput else { return }
+            if writer.status == .writing && input.isReadyForMoreMediaData && sessionStarted {
+                input.append(sampleBuffer)
+            }
+            
+        // Bỏ qua .audioMic hoàn toàn
+        @unknown default:
+            break
         }
     }
     
     private func forceStopAndSave() {
         isRecording = false
+        
         videoInput?.markAsFinished()
+        audioAppInput?.markAsFinished()
         
         if let writer = assetWriter, writer.status == .writing {
             let semaphore = DispatchSemaphore(value: 0)
@@ -197,7 +229,10 @@ class SampleHandler: RPBroadcastSampleHandler {
     
     override func broadcastFinished() {
         isRecording = false
+        
         videoInput?.markAsFinished()
+        audioAppInput?.markAsFinished()
+        
         stopCheckTimer?.invalidate()
         stopCheckTimer = nil
         guard let writer = assetWriter else { return }
