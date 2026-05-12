@@ -163,11 +163,12 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
         "path": widget.videoPath,
       });
       if (success) {
-        if (mounted)
+        if (mounted) {
           Navigator.pop(
             context,
             'deleted',
           ); // Đóng player, báo về cho màn hình chính
+        }
       } else {
         _showSnackBar("Không thể xóa video", isError: true);
       }
@@ -292,7 +293,6 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
                     )
                   : const CircularProgressIndicator(color: Color(0xFFFF3B30)),
             ),
-            
 
             // 2. LỚP ĐIỀU KHIỂN (CONTROLS OVERLAY)
             AnimatedOpacity(
