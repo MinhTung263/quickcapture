@@ -276,6 +276,11 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
       backgroundColor: Colors.black,
       body: GestureDetector(
         onTap: _toggleControls,
+        onVerticalDragUpdate: (details) {
+          if (details.delta.dy > 10) {
+            Navigator.of(context).pop();
+          }
+        },
         child: Stack(
           children: [
             // 1. LỚP VIDEO
@@ -287,6 +292,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
                     )
                   : const CircularProgressIndicator(color: Color(0xFFFF3B30)),
             ),
+            
 
             // 2. LỚP ĐIỀU KHIỂN (CONTROLS OVERLAY)
             AnimatedOpacity(

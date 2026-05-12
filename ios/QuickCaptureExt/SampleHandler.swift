@@ -47,16 +47,15 @@ class SampleHandler: RPBroadcastSampleHandler {
         guard let tempURL = self.tempVideoURL else { return }
         guard let imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
         
+        // Lấy CHÍNH XÁC số lượng điểm ảnh vật lý của màn hình
         let nativeWidth = CGFloat(CVPixelBufferGetWidth(imageBuffer))
         let nativeHeight = CGFloat(CVPixelBufferGetHeight(imageBuffer))
         
-        // Đọc cấu hình từ App Group (Flutter gửi xuống)
         var selectedQuality = "720p"
         var isAudioEnabled = true
         
         if let userDefaults = UserDefaults(suiteName: "group.com.quickcapture.com") {
             selectedQuality = userDefaults.string(forKey: "selectedVideoQuality") ?? "720p"
-            // Nếu Flutter chưa lưu biến này bao giờ, mặc định là true
             if userDefaults.object(forKey: "isAudioEnabled") != nil {
                 isAudioEnabled = userDefaults.bool(forKey: "isAudioEnabled")
             }
@@ -64,47 +63,58 @@ class SampleHandler: RPBroadcastSampleHandler {
         
         var finalWidth = Int(nativeWidth)
         var finalHeight = Int(nativeHeight)
-        var bitRate = 5000000
+        var bitRate = 10_000_000
         
         let maxDimension = max(nativeWidth, nativeHeight)
         var scaleFactor: CGFloat = 1.0
         
-        // Xử lý chất lượng Video
         switch selectedQuality {
         case "1080p":
-            // Giữ nguyên độ phân giải gốc, chỉ làm chẵn để tránh lỗi hệ màu
+            // CHÌA KHÓA 1: Bỏ chia 16. Chỉ làm chẵn (Mod-2) để tránh lỗi hệ màu YUV.
+            // Điều này đảm bảo kích thước video khớp từng điểm ảnh (Pixel-Perfect) với màn hình thật,
+            // vô hiệu hoá hoàn toàn thuật toán nội suy (nguyên nhân gây mờ chữ).
             finalWidth = (Int(nativeWidth) / 2) * 2
             finalHeight = (Int(nativeHeight) / 2) * 2
-            let totalPixels = nativeWidth * nativeHeight
-            bitRate = Int(totalPixels * 7.0) // Bitrate cực lớn để nét căng
+            bitRate = 20_000_000 
+            
         case "480p":
             if maxDimension > 854 { scaleFactor = 854 / maxDimension }
-            finalWidth = (Int(nativeWidth * scaleFactor) / 16) * 16
-            finalHeight = (Int(nativeHeight * scaleFactor) / 16) * 16
-            bitRate = 2500000 // 2.5 Mbps
+            finalWidth = (Int(nativeWidth * scaleFactor) / 2) * 2
+            finalHeight = (Int(nativeHeight * scaleFactor) / 2) * 2
+            bitRate = 4_000_000
+            
         default: // "720p"
             if maxDimension > 1280 { scaleFactor = 1280 / maxDimension }
-            finalWidth = (Int(nativeWidth * scaleFactor) / 16) * 16
-            finalHeight = (Int(nativeHeight * scaleFactor) / 16) * 16
-            bitRate = 5000000 // 5 Mbps
+            finalWidth = (Int(nativeWidth * scaleFactor) / 2) * 2
+            finalHeight = (Int(nativeHeight * scaleFactor) / 2) * 2
+            bitRate = 10_000_000
         }
         
         do {
             let writer = try AVAssetWriter(outputURL: tempURL, fileType: .mp4)
             
-            // --- 1. CẤU HÌNH VIDEO ---
             let videoSettings: [String: Any] = [
-                AVVideoCodecKey: AVVideoCodecType.h264,
+                AVVideoCodecKey: AVVideoCodecType.hevc, // Vẫn giữ HEVC
                 AVVideoWidthKey: finalWidth,
                 AVVideoHeightKey: finalHeight,
                 AVVideoScalingModeKey: AVVideoScalingModeResizeAspect,
+                
+                // CHÌA KHÓA 2: Ép hệ màu chuẩn HD (Rec.709). 
+                // Xóa bỏ "lớp sương mù" và hiện tượng bợt màu, giúp màu sắc rực rỡ và sâu như màn hình thật.
+                AVVideoColorPropertiesKey: [
+                    AVVideoColorPrimariesKey: AVVideoColorPrimaries_ITU_R_709_2,
+                    AVVideoTransferFunctionKey: AVVideoTransferFunction_ITU_R_709_2,
+                    AVVideoYCbCrMatrixKey: AVVideoYCbCrMatrix_ITU_R_709_2
+                ],
+                
                 AVVideoCompressionPropertiesKey: [
                     AVVideoAverageBitRateKey: bitRate,
-                    AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel,
                     AVVideoExpectedSourceFrameRateKey: 60,
-                    AVVideoMaxKeyFrameIntervalKey: 60
+                    AVVideoMaxKeyFrameIntervalKey: 30, // Tạo keyframe mỗi 0.5s
+                    AVVideoAllowFrameReorderingKey: false
                 ]
             ]
+            
             let input = AVAssetWriterInput(mediaType: .video, outputSettings: videoSettings)
             input.expectsMediaDataInRealTime = true
             if writer.canAdd(input) {
@@ -113,15 +123,14 @@ class SampleHandler: RPBroadcastSampleHandler {
                 self.videoInput = input
             }
             
-            // --- 2. CẤU HÌNH ÂM THANH (Dựa vào tuỳ chọn isAudioEnabled) ---
+            // ... Setup Âm thanh (giữ nguyên) ...
             if isAudioEnabled {
                 let audioSettings: [String: Any] = [
                     AVFormatIDKey: kAudioFormatMPEG4AAC,
                     AVNumberOfChannelsKey: 2,
                     AVSampleRateKey: 44100,
-                    AVEncoderBitRateKey: 128000 // 128 Kbps
+                    AVEncoderBitRateKey: 192_000
                 ]
-                
                 let appAudioIn = AVAssetWriterInput(mediaType: .audio, outputSettings: audioSettings)
                 appAudioIn.expectsMediaDataInRealTime = true
                 if writer.canAdd(appAudioIn) {
@@ -129,7 +138,6 @@ class SampleHandler: RPBroadcastSampleHandler {
                     self.audioAppInput = appAudioIn
                 }
             }
-            // ----------------------------------------------------------------
             
         } catch {
             print("Lỗi khởi tạo Writer: \(error)")

@@ -159,9 +159,11 @@ class _ScreenRecordAppState extends State<ScreenRecordApp>
             if (isRecording) {
               status = "Đang ghi hình...";
             } else {
+              // Thêm điều kiện bắt trạng thái "Đang mở trình quay..." ở đây
               if (status == "Hãy chọn 'Bắt đầu truyền phát'..." ||
-                  status.contains("Vui lòng cấp quyền")) {
-                status = "Sẵn sàng";
+                  status.contains("Vui lòng cấp quyền") ||
+                  status == "Đang mở trình quay...") {
+                status = "Sẵn sàng"; // Trả giao diện về trạng thái ban đầu
               }
             }
           });
@@ -805,7 +807,7 @@ class _ScreenRecordAppState extends State<ScreenRecordApp>
                 horizontal: 16,
                 vertical: 10,
               ),
-              onTap: () {
+              onTap: () async {
                 if (isSelectionMode) {
                   setState(() {
                     selectedPaths.contains(path)
@@ -814,7 +816,7 @@ class _ScreenRecordAppState extends State<ScreenRecordApp>
                     if (selectedPaths.isEmpty) isSelectionMode = false;
                   });
                 } else {
-                  Navigator.push(
+                  final result = await Navigator.push(
                     context,
                     MaterialPageRoute(
                       builder: (context) => VideoPlayerScreen(
@@ -823,6 +825,9 @@ class _ScreenRecordAppState extends State<ScreenRecordApp>
                       ),
                     ),
                   );
+                  if (result == "deleted") {
+                    await loadVideoList();
+                  }
                 }
               },
               leading: isSelectionMode
